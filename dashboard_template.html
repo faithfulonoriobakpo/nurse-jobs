@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nurse Job Board</title>
+<style>
+:root{
+  --bg:#f6f7f9;--card:#fff;--ink:#16191d;--muted:#5d6670;--line:#e2e5ea;
+  --accent:#0b62c4;--accent-soft:#e6f0fb;
+  --ok:#0b7a3e;--ok-soft:#e3f4ea;--mid:#8a5a00;--mid-soft:#fbf1dc;--none:#6b7280;--none-soft:#eef0f3;
+  --warn:#b42318;--new:#6d28d9;--new-soft:#efe8fd;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0f1216;--card:#171b21;--ink:#e8ebef;--muted:#9aa4af;--line:#2a3038;
+  --accent:#5aa2f0;--accent-soft:#16283d;
+  --ok:#4fc486;--ok-soft:#132a1f;--mid:#e0b057;--mid-soft:#2b2312;--none:#9aa4af;--none-soft:#22272e;
+  --warn:#f07167;--new:#b69cf7;--new-soft:#241c3a;
+}}
+:root[data-theme="dark"]{
+  --bg:#0f1216;--card:#171b21;--ink:#e8ebef;--muted:#9aa4af;--line:#2a3038;
+  --accent:#5aa2f0;--accent-soft:#16283d;
+  --ok:#4fc486;--ok-soft:#132a1f;--mid:#e0b057;--mid-soft:#2b2312;--none:#9aa4af;--none-soft:#22272e;
+  --warn:#f07167;--new:#b69cf7;--new-soft:#241c3a;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1040px;margin:0 auto;padding:20px 16px 60px}
+header h1{font-size:22px;margin:0}
+header p{margin:4px 0 0;color:var(--muted);font-size:13px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:18px 0}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;text-align:left;color:inherit;font:inherit}
+.stat b{display:block;font-size:22px;font-variant-numeric:tabular-nums}
+.stat span{color:var(--muted);font-size:12px}
+.stat.on{outline:2px solid var(--accent)}
+.filters{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center;position:sticky;top:0;z-index:2}
+.filters input[type=search]{flex:1 1 220px;min-width:0;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit}
+select{padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit;max-width:100%}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:999px;padding:5px 11px;font:inherit;font-size:13px;cursor:pointer}
+.chip[aria-pressed=true]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600}
+.count{color:var(--muted);font-size:13px;margin:14px 2px 8px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.count button{background:none;border:0;color:var(--accent);cursor:pointer;font:inherit;font-size:13px;padding:0}
+.job{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:8px;display:grid;grid-template-columns:1fr auto;gap:4px 12px}
+.job.applied{opacity:.6}
+.job h2{font-size:16px;margin:0;line-height:1.3}
+.job h2 a{color:var(--ink);text-decoration:none}
+.job h2 a:hover{color:var(--accent);text-decoration:underline}
+.emp{color:var(--muted);font-size:14px}
+.meta{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:var(--muted);grid-column:1/-1}
+.meta strong{color:var(--ink);font-weight:600}
+.snip{grid-column:1/-1;font-size:13px;color:var(--muted);margin:2px 0 0}
+.side{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+.badge{font-size:12px;font-weight:600;border-radius:6px;padding:2px 8px;white-space:nowrap}
+.b-welcome{background:var(--ok-soft);color:var(--ok)}
+.b-licensed{background:var(--mid-soft);color:var(--mid)}
+.b-unknown{background:var(--none-soft);color:var(--none)}
+.b-new{background:var(--new-soft);color:var(--new)}
+.soon{color:var(--warn)!important;font-weight:600}
+.score{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.actions{grid-column:1/-1;display:flex;gap:8px;margin-top:6px}
+.actions button,.actions a{font:inherit;font-size:13px;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:7px;padding:4px 10px;cursor:pointer;text-decoration:none}
+.actions a{background:var(--accent);border-color:var(--accent);color:#fff}
+.actions button[aria-pressed=true]{background:var(--ok-soft);border-color:var(--ok);color:var(--ok)}
+.empty{text-align:center;color:var(--muted);padding:40px 0}
+details.help{margin-top:22px;font-size:13px;color:var(--muted)}
+details.help summary{cursor:pointer;color:var(--ink)}
+.more{display:block;margin:12px auto;padding:8px 16px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;font:inherit;cursor:pointer}
+@media (max-width:640px){
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .filters{position:static}
+  .job{grid-template-columns:1fr}
+  .side{flex-direction:row;flex-wrap:wrap;align-items:center}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>Nursing jobs with visa sponsorship</h1>
+  <p id="updated"></p>
+</header>
+
+<div class="stats" id="stats"></div>
+
+<div class="filters">
+  <input type="search" id="q" placeholder="Search role, employer, town…" aria-label="Search">
+  <div class="chips" id="cosChips" role="group" aria-label="Sponsorship"></div>
+  <select id="region" aria-label="Region"><option value="">All regions</option></select>
+  <select id="dist" aria-label="Distance">
+    <option value="">Any distance</option><option value="25">Within 25 mi</option><option value="50">Within 50 mi</option>
+    <option value="100">Within 100 mi</option><option value="200">Within 200 mi</option>
+  </select>
+  <select id="contract" aria-label="Contract"><option value="">Any contract</option></select>
+  <select id="sort" aria-label="Sort">
+    <option value="best">Best match</option><option value="new">Newest first</option>
+    <option value="closing">Closing soon</option><option value="near">Nearest</option>
+  </select>
+  <div class="chips">
+    <button class="chip" id="newOnly" aria-pressed="false">New only</button>
+    <button class="chip" id="showHidden" aria-pressed="false">Show hidden</button>
+  </div>
+</div>
+
+<div class="count"><span id="count"></span><button id="reset">Reset filters</button></div>
+<div id="list"></div>
+<button class="more" id="more" hidden>Show more</button>
+
+<details class="help">
+  <summary>What the sponsorship labels mean</summary>
+  <p><b>Welcomes COS</b>: the advert itself says applicants who need Skilled Worker sponsorship are welcome (NHS Jobs "Certificate of Sponsorship" section, or sponsorship mentioned in the advert).</p>
+  <p><b>Licensed sponsor</b>: the advert doesn't mention sponsorship, but the employer is on the Home Office register of licensed Skilled Worker sponsors, so it <i>can</i> issue a COS. Worth applying and asking.</p>
+  <p><b>Not confirmed</b>: no sponsorship wording and the employer name wasn't found on the register (names don't always match exactly, e.g. trading names). Check before applying.</p>
+  <p>Adverts that say sponsorship is not available are left out. Always confirm on the advert, as salary and other Skilled Worker rules still apply.</p>
+</details>
+</div>
+
+<script>
+const DATA = /*__DATA__*/null;
+const COS = {welcome:"Welcomes COS", licensed:"Licensed sponsor", unknown:"Not confirmed"};
+const store = {
+  get(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d }catch(e){ return d } },
+  set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)) }catch(e){} }
+};
+const marks = store.get("marks", {});          // id -> "applied" | "hidden"
+const defaults = {q:"", cos:["welcome","licensed"], region:"", dist:"", contract:"", sort:"best", newOnly:false, showHidden:false};
+let f = Object.assign({}, defaults, store.get("filters", {}));
+let limit = 60;
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const today = new Date(); today.setHours(0,0,0,0);
+const days = d => d ? Math.round((new Date(d + "T00:00:00") - today) / 864e5) : null;
+const fmtDate = d => d ? new Date(d + "T00:00:00").toLocaleDateString("en-GB", {day:"numeric", month:"short"}) : "";
+const isNew = j => days(j.first_seen) >= -1;
+const money = s => (s || "").replace(/(\d)\.00\b/g, "$1").replace(/£(\d{2})(\d{3})\b/g, "£$1,$2");
+const contractOf = j => /bank/i.test(j.title + " " + j.contract) ? "Bank" : (j.contract || "Other");
+
+const jobs = DATA ? DATA.jobs : [];
+$("updated").textContent = DATA
+  ? `Updated ${new Date(DATA.generated).toLocaleString("en-GB", {weekday:"short", day:"numeric", month:"short", hour:"2-digit", minute:"2-digit"})} · ${jobs.length} Band 5 / RN roles across the UK · distances from ${DATA.home}`
+  : "No data yet. Run find_jobs.py.";
+
+// Filter options come from the data so they always match what's there.
+[...new Set(jobs.map(j => j.region).filter(Boolean))].sort().forEach(r => $("region").add(new Option(r, r)));
+[...new Set(jobs.map(contractOf))].sort().forEach(c => $("contract").add(new Option(c, c)));
+
+function stats(){
+  const n = c => jobs.filter(j => j.cos === c).length;
+  const cards = [
+    ["welcome", n("welcome"), "Welcome COS applicants"],
+    ["licensed", n("licensed"), "At licensed sponsors"],
+    ["new", jobs.filter(isNew).length, "New in last 2 days"],
+    ["closing", jobs.filter(j => { const d = days(j.closes); return d !== null && d <= 3 }).length, "Closing within 3 days"],
+  ];
+  $("stats").innerHTML = cards.map(([k, v, l]) => {
+    const on = (k === "new" && f.newOnly) || (k === "closing" && f.sort === "closing")
+      || ((k === "welcome" || k === "licensed") && f.cos.length === 1 && f.cos[0] === k);
+    return `<button class="stat${on ? " on" : ""}" data-k="${k}"><b>${v}</b><span>${l}</span></button>`;
+  }).join("");
+  $("stats").querySelectorAll(".stat").forEach(b => b.onclick = () => {
+    const k = b.dataset.k;
+    if (k === "new") f.newOnly = !f.newOnly;
+    else if (k === "closing") f.sort = f.sort === "closing" ? "best" : "closing";
+    else f.cos = (f.cos.length === 1 && f.cos[0] === k) ? ["welcome","licensed"] : [k];
+    limit = 60; sync(); render();
+  });
+}
+
+function sync(){
+  $("q").value = f.q; $("region").value = f.region; $("dist").value = f.dist;
+  $("contract").value = f.contract; $("sort").value = f.sort;
+  $("newOnly").setAttribute("aria-pressed", f.newOnly);
+  $("showHidden").setAttribute("aria-pressed", f.showHidden);
+  $("cosChips").innerHTML = Object.entries(COS).map(([k, l]) =>
+    `<button class="chip" data-k="${k}" aria-pressed="${f.cos.includes(k)}">${l}</button>`).join("");
+  $("cosChips").querySelectorAll(".chip").forEach(b => b.onclick = () => {
+    const k = b.dataset.k;
+    f.cos = f.cos.includes(k) ? f.cos.filter(x => x !== k) : [...f.cos, k];
+    limit = 60; sync(); render();
+  });
+  store.set("filters", f);
+}
+
+function visible(){
+  const q = f.q.trim().toLowerCase();
+  let list = jobs.filter(j =>
+    f.cos.includes(j.cos)
+    && (!f.region || j.region === f.region)
+    && (!f.dist || (j.miles != null && j.miles <= +f.dist))
+    && (!f.contract || contractOf(j) === f.contract)
+    && (!f.newOnly || isNew(j))
+    && (f.showHidden || marks[j.id] !== "hidden")
+    && (!q || `${j.title} ${j.employer} ${j.location} ${j.region}`.toLowerCase().includes(q)));
+  const rank = {welcome:0, licensed:1, unknown:2};
+  const by = {
+    best: (a, b) => rank[a.cos] - rank[b.cos] || b.score - a.score,
+    new: (a, b) => (b.posted || "").localeCompare(a.posted || "") || b.score - a.score,
+    closing: (a, b) => (a.closes || "9999").localeCompare(b.closes || "9999"),
+    near: (a, b) => (a.miles ?? 1e9) - (b.miles ?? 1e9),
+  }[f.sort];
+  return list.sort(by);
+}
+
+function card(j){
+  const d = days(j.closes), m = marks[j.id];
+  const closes = j.closes ? `<span class="${d <= 3 ? "soon" : ""}">Closes ${d === 0 ? "today" : fmtDate(j.closes)}</span>` : "";
+  const where = [j.location, j.region && !j.location.includes(j.region) ? j.region : "", j.miles != null ? `${j.miles} mi` : ""].filter(Boolean).join(" · ");
+  return `<article class="job${m === "applied" ? " applied" : ""}">
+    <div><h2><a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a></h2>
+      <div class="emp">${esc(j.employer)}</div></div>
+    <div class="side">
+      <span class="badge b-${j.cos}">${COS[j.cos]}</span>
+      ${isNew(j) ? `<span class="badge b-new">New</span>` : ""}
+      <span class="score" title="Match with CV: ${esc(j.matched)}">Match ${j.score}</span>
+    </div>
+    <div class="meta">
+      <span>${esc(where)}</span>
+      ${j.salary ? `<strong>${esc(money(j.salary))}</strong>` : ""}
+      ${j.contract ? `<span>${esc(j.contract)}</span>` : ""}
+      ${j.posted ? `<span>Posted ${fmtDate(j.posted)}</span>` : ""}
+      ${closes}
+    </div>
+    ${j.snippet ? `<p class="snip">${esc(j.snippet)}</p>` : ""}
+    <div class="actions">
+      <a href="${esc(j.url)}" target="_blank" rel="noopener">View advert</a>
+      <button data-id="${esc(j.id)}" data-m="applied" aria-pressed="${m === "applied"}">${m === "applied" ? "Applied ✓" : "Mark applied"}</button>
+      <button data-id="${esc(j.id)}" data-m="hidden" aria-pressed="${m === "hidden"}">${m === "hidden" ? "Unhide" : "Hide"}</button>
+    </div>
+  </article>`;
+}
+
+function render(){
+  stats();
+  const list = visible();
+  $("count").textContent = `Showing ${Math.min(limit, list.length)} of ${list.length} jobs`;
+  $("list").innerHTML = list.length ? list.slice(0, limit).map(card).join("")
+    : `<p class="empty">No jobs match these filters.</p>`;
+  $("more").hidden = list.length <= limit;
+}
+
+$("list").addEventListener("click", e => {
+  const b = e.target.closest("button[data-id]");
+  if (!b) return;
+  const {id, m} = b.dataset;
+  if (marks[id] === m) delete marks[id]; else marks[id] = m;
+  store.set("marks", marks);
+  render();
+});
+$("q").oninput = e => { f.q = e.target.value; limit = 60; store.set("filters", f); render(); };
+["region", "dist", "contract", "sort"].forEach(id => $(id).onchange = e => { f[id] = e.target.value; limit = 60; sync(); render(); });
+$("newOnly").onclick = () => { f.newOnly = !f.newOnly; sync(); render(); };
+$("showHidden").onclick = () => { f.showHidden = !f.showHidden; sync(); render(); };
+$("reset").onclick = () => { f = Object.assign({}, defaults); limit = 60; sync(); render(); };
+$("more").onclick = () => { limit += 60; render(); };
+
+sync(); render();
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+output/*
+!output/seen.json
+!output/cache/
+output/cache/*
+!output/cache/cos.json
+!output/cache/postcodes.json
+keys.bat
+__pycache__/
