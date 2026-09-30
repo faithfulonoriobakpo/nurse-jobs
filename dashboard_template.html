@@ -28,7 +28,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-ap
 .wrap{max-width:1040px;margin:0 auto;padding:20px 16px 60px}
 header h1{font-size:22px;margin:0}
 header p{margin:4px 0 0;color:var(--muted);font-size:13px}
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:18px 0}
+.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:18px 0}
 .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;text-align:left;color:inherit;font:inherit}
 .stat b{display:block;font-size:22px;font-variant-numeric:tabular-nums}
 .stat span{color:var(--muted);font-size:12px}
@@ -42,7 +42,18 @@ select{padding:7px 8px;border:1px solid var(--line);border-radius:8px;background
 .count{color:var(--muted);font-size:13px;margin:14px 2px 8px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .count button{background:none;border:0;color:var(--accent);cursor:pointer;font:inherit;font-size:13px;padding:0}
 .job{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:8px;display:grid;grid-template-columns:1fr auto;gap:4px 12px}
-.job.applied{opacity:.6}
+.job.dim{opacity:.6}
+.top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
+.account{font-size:13px;color:var(--muted);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.account button,.account input{font:inherit;font-size:13px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:7px;padding:5px 10px}
+.account button{cursor:pointer}
+.account button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.account form{display:flex;gap:6px;flex-wrap:wrap}
+.account input{width:170px;max-width:100%}
+.msg{color:var(--warn);font-size:13px}
+.status{font:inherit;font-size:13px;border-radius:7px;padding:4px 8px}
+.status.set{border-color:var(--accent);color:var(--accent);background:var(--accent-soft);font-weight:600}
+.b-closed{background:var(--none-soft);color:var(--warn)}
 .job h2{font-size:16px;margin:0;line-height:1.3}
 .job h2 a{color:var(--ink);text-decoration:none}
 .job h2 a:hover{color:var(--accent);text-decoration:underline}
@@ -68,6 +79,7 @@ details.help summary{cursor:pointer;color:var(--ink)}
 .more{display:block;margin:12px auto;padding:8px 16px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;font:inherit;cursor:pointer}
 @media (max-width:640px){
   .stats{grid-template-columns:repeat(2,1fr)}
+  .account input{width:100%}
   .filters{position:static}
   .job{grid-template-columns:1fr}
   .side{flex-direction:row;flex-wrap:wrap;align-items:center}
@@ -76,9 +88,12 @@ details.help summary{cursor:pointer;color:var(--ink)}
 </head>
 <body>
 <div class="wrap">
-<header>
-  <h1>Nursing jobs with visa sponsorship</h1>
-  <p id="updated"></p>
+<header class="top">
+  <div>
+    <h1>Nursing jobs with visa sponsorship</h1>
+    <p id="updated"></p>
+  </div>
+  <div class="account" id="account"></div>
 </header>
 
 <div class="stats" id="stats"></div>
@@ -101,6 +116,7 @@ details.help summary{cursor:pointer;color:var(--ink)}
     <button class="chip" id="careOnly" aria-pressed="false">Care homes only</button>
     <button class="chip" id="newOnly" aria-pressed="false">New only</button>
     <button class="chip" id="showHidden" aria-pressed="false">Show hidden</button>
+    <button class="chip" id="tracked" aria-pressed="false">My applications</button>
   </div>
 </div>
 
@@ -117,15 +133,21 @@ details.help summary{cursor:pointer;color:var(--ink)}
 </details>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
 const DATA = /*__DATA__*/null;
+const SUPA = /*__SUPABASE__*/null;
+const STATUS = {saved:"Saved", applied:"Applied", interview:"Interview", offer:"Offer", rejected:"Rejected", hidden:"Hidden"};
+const STATUS_ORDER = ["offer", "interview", "applied", "saved", "rejected"];
 const COS = {welcome:"Welcomes COS", licensed:"Licensed sponsor", unknown:"Not confirmed"};
 const store = {
   get(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d }catch(e){ return d } },
   set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)) }catch(e){} }
 };
-const marks = store.get("marks", {});          // id -> "applied" | "hidden"
-const defaults = {q:"", cos:["welcome","licensed"], region:"", dist:"", contract:"", source:"", sort:"best", careOnly:false, newOnly:false, showHidden:false};
+// id -> status. Signed in: from Supabase (shared across devices). Signed out: this browser only.
+let marks = store.get("marks", {});
+let sb = null, user = null, accountMsg = "", showForm = false;
+const defaults = {q:"", cos:["welcome","licensed"], region:"", dist:"", contract:"", source:"", sort:"best", careOnly:false, newOnly:false, showHidden:false, tracked:false};
 let f = Object.assign({}, defaults, store.get("filters", {}));
 let limit = 60;
 
@@ -141,8 +163,10 @@ const CARE = /care home|nursing home|residential home|residential care|nursing a
 const isCare = j => CARE.test(`${j.title} ${j.employer} ${j.snippet}`);
 
 const jobs = DATA ? DATA.jobs : [];
+const open = jobs.filter(j => j.active !== false);
+const isTracked = j => marks[j.id] && marks[j.id] !== "hidden";
 $("updated").textContent = DATA
-  ? `Updated ${new Date(DATA.generated).toLocaleString("en-GB", {weekday:"short", day:"numeric", month:"short", hour:"2-digit", minute:"2-digit"})} · ${jobs.length} Band 5 / RN roles across the UK · distances from ${DATA.home}`
+  ? `Updated ${new Date(DATA.generated).toLocaleString("en-GB", {weekday:"short", day:"numeric", month:"short", hour:"2-digit", minute:"2-digit"})} · ${open.length} Band 5 / RN roles across the UK · distances from ${DATA.home}`
   : "No data yet. Run find_jobs.py.";
 
 // Filter options come from the data so they always match what's there.
@@ -151,21 +175,23 @@ $("updated").textContent = DATA
 [...new Set(jobs.map(j => j.source))].sort().forEach(s => $("source").add(new Option(s, s)));
 
 function stats(){
-  const n = c => jobs.filter(j => j.cos === c).length;
+  const n = c => open.filter(j => j.cos === c).length;
   const cards = [
     ["welcome", n("welcome"), "Welcome COS applicants"],
     ["licensed", n("licensed"), "At licensed sponsors"],
-    ["new", jobs.filter(isNew).length, "New in last 2 days"],
-    ["closing", jobs.filter(j => { const d = days(j.closes); return d !== null && d <= 3 }).length, "Closing within 3 days"],
+    ["new", open.filter(isNew).length, "New in last 2 days"],
+    ["closing", open.filter(j => { const d = days(j.closes); return d !== null && d <= 3 }).length, "Closing within 3 days"],
+    ["tracked", jobs.filter(isTracked).length, user ? "My applications" : "My applications (this device)"],
   ];
   $("stats").innerHTML = cards.map(([k, v, l]) => {
-    const on = (k === "new" && f.newOnly) || (k === "closing" && f.sort === "closing")
+    const on = (k === "new" && f.newOnly) || (k === "closing" && f.sort === "closing") || (k === "tracked" && f.tracked)
       || ((k === "welcome" || k === "licensed") && f.cos.length === 1 && f.cos[0] === k);
     return `<button class="stat${on ? " on" : ""}" data-k="${k}"><b>${v}</b><span>${l}</span></button>`;
   }).join("");
   $("stats").querySelectorAll(".stat").forEach(b => b.onclick = () => {
     const k = b.dataset.k;
-    if (k === "new") f.newOnly = !f.newOnly;
+    if (k === "tracked") f.tracked = !f.tracked;
+    else if (k === "new") f.newOnly = !f.newOnly;
     else if (k === "closing") f.sort = f.sort === "closing" ? "best" : "closing";
     else f.cos = (f.cos.length === 1 && f.cos[0] === k) ? ["welcome","licensed"] : [k];
     limit = 60; sync(); render();
@@ -178,6 +204,7 @@ function sync(){
   $("careOnly").setAttribute("aria-pressed", f.careOnly);
   $("newOnly").setAttribute("aria-pressed", f.newOnly);
   $("showHidden").setAttribute("aria-pressed", f.showHidden);
+  $("tracked").setAttribute("aria-pressed", f.tracked);
   $("cosChips").innerHTML = Object.entries(COS).map(([k, l]) =>
     `<button class="chip" data-k="${k}" aria-pressed="${f.cos.includes(k)}">${l}</button>`).join("");
   $("cosChips").querySelectorAll(".chip").forEach(b => b.onclick = () => {
@@ -190,7 +217,12 @@ function sync(){
 
 function visible(){
   const q = f.q.trim().toLowerCase();
-  let list = jobs.filter(j =>
+  const text = j => `${j.title} ${j.employer} ${j.location} ${j.region}`.toLowerCase().includes(q);
+  if (f.tracked) {
+    return jobs.filter(j => isTracked(j) && (!q || text(j)))
+      .sort((a, b) => STATUS_ORDER.indexOf(marks[a.id]) - STATUS_ORDER.indexOf(marks[b.id]) || (a.closes || "9999").localeCompare(b.closes || "9999"));
+  }
+  let list = open.filter(j =>
     f.cos.includes(j.cos)
     && (!f.region || j.region === f.region)
     && (!f.dist || (j.miles != null && j.miles <= +f.dist))
@@ -199,7 +231,7 @@ function visible(){
     && (!f.careOnly || isCare(j))
     && (!f.newOnly || isNew(j))
     && (f.showHidden || marks[j.id] !== "hidden")
-    && (!q || `${j.title} ${j.employer} ${j.location} ${j.region}`.toLowerCase().includes(q)));
+    && (!q || text(j)));
   const rank = {welcome:0, licensed:1, unknown:2};
   const by = {
     best: (a, b) => rank[a.cos] - rank[b.cos] || b.score - a.score,
@@ -214,12 +246,13 @@ function card(j){
   const d = days(j.closes), m = marks[j.id];
   const closes = j.closes ? `<span class="${d <= 3 ? "soon" : ""}">Closes ${d === 0 ? "today" : fmtDate(j.closes)}</span>` : "";
   const where = [j.location, j.region && !j.location.includes(j.region) ? j.region : "", j.miles != null ? `${j.miles} mi` : ""].filter(Boolean).join(" · ");
-  return `<article class="job${m === "applied" ? " applied" : ""}">
+  const opts = `<option value="">Track…</option>` + Object.entries(STATUS).map(([k, l]) => `<option value="${k}"${m === k ? " selected" : ""}>${l}</option>`).join("");
+  return `<article class="job${m === "rejected" || m === "hidden" || j.active === false ? " dim" : ""}">
     <div><h2><a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a></h2>
       <div class="emp">${esc(j.employer)}</div></div>
     <div class="side">
       <span class="badge b-${j.cos}">${COS[j.cos]}</span>
-      ${isNew(j) ? `<span class="badge b-new">New</span>` : ""}
+      ${j.active === false ? `<span class="badge b-closed">Closed</span>` : isNew(j) ? `<span class="badge b-new">New</span>` : ""}
       <span class="score" title="Match with CV: ${esc(j.matched)}">Match ${j.score}</span>
     </div>
     <div class="meta">
@@ -233,8 +266,7 @@ function card(j){
     ${j.snippet ? `<p class="snip">${esc(j.snippet)}</p>` : ""}
     <div class="actions">
       <a href="${esc(j.url)}" target="_blank" rel="noopener">View advert</a>
-      <button data-id="${esc(j.id)}" data-m="applied" aria-pressed="${m === "applied"}">${m === "applied" ? "Applied ✓" : "Mark applied"}</button>
-      <button data-id="${esc(j.id)}" data-m="hidden" aria-pressed="${m === "hidden"}">${m === "hidden" ? "Unhide" : "Hide"}</button>
+      <select class="status${m ? " set" : ""}" data-id="${esc(j.id)}" aria-label="Application status">${opts}</select>
     </div>
   </article>`;
 }
@@ -242,29 +274,99 @@ function card(j){
 function render(){
   stats();
   const list = visible();
-  $("count").textContent = `Showing ${Math.min(limit, list.length)} of ${list.length} jobs`;
+  $("count").textContent = f.tracked ? `${list.length} tracked job${list.length === 1 ? "" : "s"}` : `Showing ${Math.min(limit, list.length)} of ${list.length} jobs`;
   $("list").innerHTML = list.length ? list.slice(0, limit).map(card).join("")
-    : `<p class="empty">No jobs match these filters.</p>`;
+    : `<p class="empty">${f.tracked ? "Nothing tracked yet. Use the Track… menu on a job." : "No jobs match these filters."}</p>`;
   $("more").hidden = list.length <= limit;
 }
 
-$("list").addEventListener("click", e => {
-  const b = e.target.closest("button[data-id]");
-  if (!b) return;
-  const {id, m} = b.dataset;
-  if (marks[id] === m) delete marks[id]; else marks[id] = m;
-  store.set("marks", marks);
-  render();
+$("list").addEventListener("change", e => {
+  const sel = e.target.closest("select.status");
+  if (sel) setStatus(sel.dataset.id, sel.value);
 });
+
+async function setStatus(id, status){
+  const prev = marks[id];
+  if (status) marks[id] = status; else delete marks[id];
+  render();
+  if (!user) { store.set("marks", marks); return; }
+  const {error} = status
+    ? await sb.from("job_status").upsert({job_id: id, status})
+    : await sb.from("job_status").delete().eq("job_id", id);
+  if (error) {
+    if (prev) marks[id] = prev; else delete marks[id];
+    accountMsg = "Couldn't save: " + error.message; renderAccount(); render();
+  }
+}
+
+// ---- accounts (Supabase). Only accounts created in the Supabase dashboard can sign in.
+function renderAccount(){
+  const el = $("account");
+  if (!sb) { el.innerHTML = ""; return; }
+  const msg = accountMsg ? `<span class="msg">${esc(accountMsg)}</span>` : "";
+  if (user) {
+    el.innerHTML = `<span>Signed in as ${esc(user.email)}</span><button id="signout">Sign out</button>${msg}`;
+    $("signout").onclick = async () => { await sb.auth.signOut(); };
+  } else if (showForm) {
+    el.innerHTML = `<form id="signin">
+      <input type="email" name="email" placeholder="Email" autocomplete="username" required>
+      <input type="password" name="password" placeholder="Password" autocomplete="current-password" required>
+      <button class="primary">Sign in</button></form>${msg}`;
+    $("signin").onsubmit = async e => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const {error} = await sb.auth.signInWithPassword({email: fd.get("email"), password: fd.get("password")});
+      accountMsg = error ? error.message : "";
+      renderAccount();
+    };
+  } else {
+    el.innerHTML = `<button id="showSignin">Sign in to sync applications</button>${msg}`;
+    $("showSignin").onclick = () => { showForm = true; renderAccount(); };
+  }
+}
+
+async function loadStatuses(){
+  if (!user) { marks = store.get("marks", {}); render(); return; }
+  const {data, error} = await sb.from("job_status").select("job_id,status");
+  if (error) { accountMsg = "Couldn't load applications: " + error.message; renderAccount(); return; }
+  const server = Object.fromEntries(data.map(r => [r.job_id, r.status]));
+  // Carry over anything marked on this device before signing in.
+  const known = new Set(jobs.map(j => j.id));
+  const local = Object.entries(store.get("marks", {})).filter(([id]) => !(id in server) && known.has(id))
+    .map(([job_id, status]) => ({job_id, status}));
+  if (local.length) {
+    const {error: upErr} = await sb.from("job_status").upsert(local);
+    if (!upErr) { local.forEach(r => server[r.job_id] = r.status); store.set("marks", {}); }
+  }
+  marks = server;
+  render();
+}
+
+async function initAuth(){
+  if (!SUPA || !window.supabase) return;
+  sb = window.supabase.createClient(SUPA.url, SUPA.key);
+  const {data: {session}} = await sb.auth.getSession();
+  user = session ? session.user : null;
+  sb.auth.onAuthStateChange((_event, s) => {
+    const was = user && user.id;
+    user = s ? s.user : null;
+    if ((user && user.id) !== was) { showForm = false; loadStatuses(); }
+    renderAccount();
+  });
+  renderAccount();
+  if (user) await loadStatuses();
+}
 $("q").oninput = e => { f.q = e.target.value; limit = 60; store.set("filters", f); render(); };
 ["region", "dist", "contract", "source", "sort"].forEach(id => $(id).onchange = e => { f[id] = e.target.value; limit = 60; sync(); render(); });
 $("careOnly").onclick = () => { f.careOnly = !f.careOnly; limit = 60; sync(); render(); };
 $("newOnly").onclick = () => { f.newOnly = !f.newOnly; sync(); render(); };
 $("showHidden").onclick = () => { f.showHidden = !f.showHidden; sync(); render(); };
+$("tracked").onclick = () => { f.tracked = !f.tracked; sync(); render(); };
 $("reset").onclick = () => { f = Object.assign({}, defaults); limit = 60; sync(); render(); };
 $("more").onclick = () => { limit += 60; render(); };
 
 sync(); render();
+initAuth();
 </script>
 </body>
 </html>

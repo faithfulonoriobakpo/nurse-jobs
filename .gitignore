@@ -6,3 +6,4 @@ output/cache/*
 !output/cache/postcodes.json
 keys.bat
 __pycache__/
+.env.local

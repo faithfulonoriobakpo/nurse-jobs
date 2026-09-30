@@ -34,6 +34,7 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -367,26 +368,25 @@ def nhs_advert_cos(url):
     return "no" if NO_SPONSOR.search(re.sub(r"<[^>]+>", " ", page)) else "not stated"
 
 
-def add_sponsorship(jobs):
+def add_sponsorship(jobs, advert_cache):
+    """Set each job's advert_cos / licensed / cos. advert_cache (job id -> advert result) is read and updated."""
     register = sponsor_register()
-    cache = load_json(CACHE / "cos.json", {})
-    todo = [j for j in jobs if j["source"] == "NHS Jobs" and j["id"] not in cache]
+    todo = [j for j in jobs if j["source"] == "NHS Jobs" and j["id"] not in advert_cache]
     if todo:
         print(f"Checking {len(todo)} NHS adverts for a Certificate of Sponsorship section...")
         with ThreadPoolExecutor(6) as pool:
             for i, (job, status) in enumerate(zip(todo, pool.map(lambda j: nhs_advert_cos(j["url"]), todo)), 1):
                 if status:
-                    cache[job["id"]] = status
+                    advert_cache[job["id"]] = status
                 if i % 200 == 0:
                     print(f"  {i}/{len(todo)}")
-                    save_json(CACHE / "cos.json", cache)
-        save_json(CACHE / "cos.json", cache)
 
     for j in jobs:
-        advert = cache.get(j["id"])
+        advert = advert_cache.get(j["id"])
         if not advert:
             text = j["description"]
             advert = "no" if NO_SPONSOR.search(text) else "welcome" if SPONSOR.search(text) else "not stated"
+        j["advert_cos"] = advert
         j["licensed"] = register.licensed(j["employer"], j["location"])
         # welcome > licensed > unknown; an explicit "no" always wins.
         j["cos"] = advert if advert in ("welcome", "no") else "licensed" if j["licensed"] else "unknown"
@@ -400,8 +400,10 @@ def haversine_miles(a, b):
     return 3958.8 * 2 * math.asin(math.sqrt(h))
 
 
-def add_location(jobs, profile):
-    cache = load_json(CACHE / "postcodes.json", {})
+def add_location(jobs, profile, cache):
+    """Set region and miles on each job. cache (postcode or "town:x" -> [lat, lon, region] | None) is
+    read and updated; returns the keys that were added."""
+    added = set()
     home = profile.get("home_postcode", "").upper()
     for j in jobs:
         m = POSTCODE.search(j["location"])
@@ -414,16 +416,15 @@ def add_location(jobs, profile):
         for item in (json.loads(raw)["result"] if raw else []):
             r = item["result"]
             cache[item["query"]] = [r["latitude"], r["longitude"], r["region"] or r["country"]] if r else None
+            added.add(item["query"])
     # Aggregator adverts usually give a town instead of a postcode ("Gateshead, Tyne & Wear").
     town_of = lambda j: "town:" + re.split(r"[,;]", j["location"])[0].strip().lower()
-    towns = sorted({town_of(j) for j in jobs if not j["postcode"] and j["location"]} - set(cache))
-    for key in towns:
+    for key in sorted({town_of(j) for j in jobs if not j["postcode"] and j["location"]} - set(cache)):
         raw = fetch(f"https://api.postcodes.io/places?{urllib.parse.urlencode({'q': key[5:], 'limit': 1})}")
-        hits = json.loads(raw)["result"] if raw else None
         if raw is not None:
+            hits = json.loads(raw)["result"]
             cache[key] = [hits[0]["latitude"], hits[0]["longitude"], hits[0]["region"] or hits[0]["country"]] if hits else None
-    if todo or towns:
-        save_json(CACHE / "postcodes.json", cache)
+            added.add(key)
 
     home_ll = cache.get(home)
     for j in jobs:
@@ -431,12 +432,154 @@ def add_location(jobs, profile):
         lat, lon = (j.get("lat"), j.get("lon")) if j.get("lat") else (hit[0], hit[1]) if hit else (None, None)
         j["region"] = hit[2] if hit else ""
         j["miles"] = round(haversine_miles(home_ll[:2], (lat, lon))) if home_ll and lat and lon else None
+    return added
+
+
+# ---------------------------------------------------------------- storage
+
+# Columns stored per job (also what the dashboard receives, plus "active").
+JOB_COLUMNS = ["id", "source", "title", "employer", "location", "region", "miles", "salary", "contract", "posted",
+               "closes", "cos", "advert_cos", "licensed", "score", "matched", "url", "snippet", "first_seen", "last_seen"]
+
+
+def is_active(job, today):
+    """Still worth showing. NHS Jobs is searched in full every day, so an NHS job that wasn't seen has been
+    withdrawn (a day's grace for a missed page). Adzuna/Reed searches are capped, so their jobs are kept
+    for a week after last being seen, unless the closing date has passed."""
+    if job.get("closes") and job["closes"] < today.isoformat():
+        return False
+    grace = 1 if job["source"] == "NHS Jobs" else 7
+    return job["last_seen"] >= (today - timedelta(days=grace)).isoformat()
+
+
+class FileStore:
+    """State in output/*.json. Used for local runs without Supabase credentials."""
+    name = "local files"
+
+    def known(self):
+        seen, cos = load_json(OUT / "seen.json", {}), load_json(CACHE / "cos.json", {})
+        first = lambda v: v["first"] if isinstance(v, dict) else v
+        return {k: {"first_seen": first(seen[k]) if k in seen else None, "advert_cos": cos.get(k)}
+                for k in set(seen) | set(cos)}
+
+    def geo(self):
+        return load_json(CACHE / "postcodes.json", {})
+
+    def save_geo(self, cache, added):
+        if added:
+            save_json(CACHE / "postcodes.json", cache)
+
+    def save(self, jobs, today):
+        seen, cos = load_json(OUT / "seen.json", {}), load_json(CACHE / "cos.json", {})
+        for j in jobs:
+            seen[j["id"]] = {"first": j["first_seen"], "last": j["last_seen"]}
+            if j["source"] == "NHS Jobs":
+                cos[j["id"]] = j["advert_cos"]
+        cutoff = (today - timedelta(days=60)).isoformat()
+        seen = {k: v for k, v in seen.items() if (v["last"] if isinstance(v, dict) else v) >= cutoff}
+        save_json(OUT / "seen.json", seen)
+        save_json(CACHE / "cos.json", {k: v for k, v in cos.items() if k in seen})
+        return [{**j, "active": True} for j in jobs]
+
+
+class SupabaseStore:
+    """State in Supabase (see supabase/schema.sql), written with the service-role / secret key."""
+    name = "Supabase"
+
+    def __init__(self, url, key):
+        self.base = url.rstrip("/") + "/rest/v1/"
+        self.headers = {"apikey": key, "Content-Type": "application/json"}
+        if key.startswith("eyJ"):  # legacy JWT keys also go in Authorization; new sb_secret_ keys must not
+            self.headers["Authorization"] = f"Bearer {key}"
+
+    def _call(self, method, path, body=None, prefer=None):
+        headers = {**UA, **self.headers, **({"Prefer": prefer} if prefer else {})}
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(self.base + path, data=data, method=method, headers=headers)
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    raw = r.read()
+                    return json.loads(raw) if raw else None
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode("utf-8", "replace")[:500]
+                if e.code < 500 or attempt == 2:
+                    raise RuntimeError(f"Supabase {method} {path.split('?')[0]} failed: {e.code} {detail}") from None
+            except urllib.error.URLError:
+                if attempt == 2:
+                    raise
+            time.sleep(3 * (attempt + 1))
+
+    def _select_all(self, table, query):
+        rows, page = [], 1000
+        while True:
+            batch = self._call("GET", f"{table}?{query}&limit={page}&offset={len(rows)}")
+            rows += batch
+            if len(batch) < page:
+                return rows
+
+    def _upsert(self, table, rows):
+        for i in range(0, len(rows), 500):
+            self._call("POST", table, rows[i:i + 500], prefer="resolution=merge-duplicates,return=minimal")
+
+    def _in(self, ids):
+        return urllib.parse.quote(",".join(f'"{x}"' for x in ids))
+
+    def known(self):
+        rows = self._select_all("jobs", "select=id,first_seen,advert_cos&order=id")
+        if not rows:
+            print("  Supabase is empty; seeding from the local state files")
+            return FileStore().known()
+        return {r["id"]: r for r in rows}
+
+    def geo(self):
+        return {r["key"]: ([r["lat"], r["lon"], r["region"]] if r["lat"] is not None else None)
+                for r in self._select_all("geo_cache", "select=key,lat,lon,region&order=key")}
+
+    def save_geo(self, cache, added):
+        self._upsert("geo_cache", [{"key": k, "lat": v[0] if v else None, "lon": v[1] if v else None,
+                                    "region": v[2] if v else None} for k in sorted(added) for v in [cache[k]]])
+
+    def save(self, jobs, today):
+        self._upsert("jobs", [{c: j.get(c) for c in JOB_COLUMNS} for j in jobs])
+
+        # Dashboard: everything still active, plus anything she has tracked (even once it has closed).
+        tracked = {r["job_id"] for r in self._select_all("job_status", "select=job_id&order=job_id")}
+        since = (today - timedelta(days=8)).isoformat()
+        cols = ",".join(JOB_COLUMNS)
+        rows = {r["id"]: r for r in self._select_all("jobs", f"select={cols}&last_seen=gte.{since}&order=id")}
+        missing = sorted(tracked - set(rows))
+        for i in range(0, len(missing), 100):
+            rows |= {r["id"]: r for r in self._call("GET", f"jobs?select={cols}&id=in.({self._in(missing[i:i + 100])})")}
+
+        # Drop long-gone, untracked jobs so the table stays small.
+        cutoff = (today - timedelta(days=120)).isoformat()
+        old = [r["id"] for r in self._select_all("jobs", f"select=id&last_seen=lt.{cutoff}&order=id") if r["id"] not in tracked]
+        for i in range(0, len(old), 100):
+            self._call("DELETE", f"jobs?id=in.({self._in(old[i:i + 100])})")
+
+        return [{**r, "active": is_active(r, today)} for r in rows.values()
+                if r["id"] in tracked or is_active(r, today)]
+
+
+def open_store():
+    url, key = os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY")
+    return SupabaseStore(url, key) if url and key else FileStore()
+
+
+def load_env_file(path):
+    """KEY=VALUE lines from a local, git-ignored file (for local runs; the Action uses repo secrets)."""
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            k, sep, v = line.strip().partition("=")
+            if sep and not k.startswith("#"):
+                os.environ.setdefault(k.strip(), v.strip().strip('"'))
 
 
 # ---------------------------------------------------------------- output
 
-CSV_FIELDS = ["new", "cos", "score", "title", "employer", "location", "region", "miles", "salary", "contract",
-              "posted", "closes", "licensed", "matched", "source", "url"]
+CSV_FIELDS = ["cos", "score", "title", "employer", "location", "region", "miles", "salary", "contract",
+              "posted", "closes", "licensed", "first_seen", "active", "matched", "source", "url"]
 
 
 def write_csv(jobs, path):
@@ -448,16 +591,20 @@ def write_csv(jobs, path):
 
 def write_dashboard(jobs, profile, path):
     keep = ["id", "title", "employer", "location", "region", "miles", "salary", "contract", "posted", "closes",
-            "cos", "licensed", "score", "matched", "source", "url", "first_seen"]
+            "cos", "licensed", "score", "matched", "source", "url", "first_seen", "snippet", "active"]
     data = {
         "generated": datetime.now().isoformat(timespec="minutes"),
         "home": profile.get("home_label") or profile.get("home_postcode", ""),
-        "jobs": [{k: j.get(k) for k in keep} | {"snippet": j["description"][:220]} for j in jobs],
+        "jobs": [{k: j.get(k) for k in keep} for j in jobs],
     }
-    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
-    template = (ROOT / "dashboard_template.html").read_text(encoding="utf-8")
+    # The public (anon / publishable) key only lets signed-in users touch job_status; see supabase/schema.sql.
+    auth = {"url": os.getenv("SUPABASE_URL"), "key": os.getenv("SUPABASE_ANON_KEY")}
+    dump = lambda o: json.dumps(o, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    page = (ROOT / "dashboard_template.html").read_text(encoding="utf-8")
+    page = page.replace("/*__DATA__*/null", dump(data))
+    page = page.replace("/*__SUPABASE__*/null", dump(auth) if all(auth.values()) else "null")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(template.replace("/*__DATA__*/null", payload), encoding="utf-8")
+    path.write_text(page, encoding="utf-8")
 
 
 # ---------------------------------------------------------------- main
@@ -469,17 +616,19 @@ def main():
     ap.add_argument("--open-if-new", action="store_true", help="open the dashboard only if there are new jobs")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    load_env_file(ROOT / ".env.local")
 
     profile = json.loads(args.profile.read_text(encoding="utf-8"))
     OUT.mkdir(exist_ok=True)
-    seen_path = OUT / "seen.json"
-    seen = load_json(seen_path, {})
+    store = open_store()
+    today = date.today()
 
     active = [s.__name__ for s in SOURCES if s is nhs_jobs
               or (s is adzuna and os.getenv("ADZUNA_APP_ID"))
               or (s is reed and os.getenv("REED_API_KEY"))]
     where = f"within {profile['radius_miles']} miles of {profile['location']}" if profile.get("location") else "across the UK"
-    print(f"Searching {', '.join(active)} for {len(profile['searches'])} terms {where}...")
+    print(f"Searching {', '.join(active)} for {len(profile['searches'])} terms {where} (state: {store.name})...")
+    known = store.known()
 
     found = {}
     for kw in profile["searches"]:
@@ -506,35 +655,29 @@ def main():
     per_source = {s: sum(j["source"] == s for j in matches) for s in SOURCE_RANK}
     print(f"  {len(matches)} match the profile ({', '.join(f'{s} {n}' for s, n in per_source.items() if n)})")
 
-    add_sponsorship(matches)
-    if profile.get("needs_cos"):
-        matches = [j for j in matches if j["cos"] != "no"]
-    add_location(matches, profile)
+    add_sponsorship(matches, {k: v["advert_cos"] for k, v in known.items() if v.get("advert_cos")})
+    geo = store.geo()
+    store.save_geo(geo, add_location(matches, profile, geo))
 
-    today = date.today().isoformat()
-    for job in matches:
-        prev = seen.get(job["id"])
-        first = prev["first"] if isinstance(prev, dict) else prev or today
-        job["first_seen"] = first
-        job["new"] = prev is None
-        seen[job["id"]] = {"first": first, "last": today}
+    for j in matches:
+        j["snippet"] = j["description"][:220]
+        j["first_seen"] = (known.get(j["id"]) or {}).get("first_seen") or today.isoformat()
+        j["last_seen"] = today.isoformat()
+    new = [j for j in matches if j["id"] not in known and j["cos"] != "no"]
+
+    # Jobs that rule sponsorship out are stored too (so their adverts aren't re-checked) but not shown.
+    shown = [j for j in store.save(matches, today) if not (profile.get("needs_cos") and j["cos"] == "no")]
     rank = {"welcome": 0, "licensed": 1, "unknown": 2, "no": 3}
-    matches.sort(key=lambda j: (rank[j["cos"]], -j["score"], j["closes"] or "9999"))
+    shown.sort(key=lambda j: (not j["active"], rank[j["cos"]], -j["score"], j["closes"] or "9999"))
 
-    # Forget jobs not seen for 60 days so the file doesn't grow forever.
-    cutoff = (date.today() - timedelta(days=60)).isoformat()
-    seen = {k: v for k, v in seen.items() if (v["last"] if isinstance(v, dict) else v) >= cutoff}
-    save_json(seen_path, seen)
-
-    write_csv(matches, OUT / "jobs_latest.csv")
-    write_csv(matches, OUT / f"jobs_{today}.csv")
+    write_csv(shown, OUT / "jobs_latest.csv")
     dashboard = OUT / "dashboard" / "index.html"
-    write_dashboard(matches, profile, dashboard)
+    write_dashboard(shown, profile, dashboard)
 
-    new = [j for j in matches if j["new"]]
-    counts = {c: sum(j["cos"] == c for j in matches) for c in ("welcome", "licensed", "unknown")}
-    print(f"  {len(matches)} jobs: {counts['welcome']} welcome COS applicants, "
-          f"{counts['licensed']} at licensed sponsors, {counts['unknown']} unknown; {len(new)} new")
+    live = [j for j in shown if j["active"]]
+    counts = {c: sum(j["cos"] == c for j in live) for c in ("welcome", "licensed", "unknown")}
+    print(f"  {len(live)} open jobs: {counts['welcome']} welcome COS applicants, "
+          f"{counts['licensed']} at licensed sponsors, {counts['unknown']} unknown; {len(new)} new today")
     for j in [j for j in new if j["cos"] != "unknown"][:10]:
         print(f"  [{j['cos']:>8}] {j['title']} - {j['employer']} ({j['location']}) {j['salary']}")
     print(f"Dashboard: {dashboard}")

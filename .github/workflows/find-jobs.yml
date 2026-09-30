@@ -6,7 +6,7 @@ on:
   workflow_dispatch:       # "Run workflow" button on the Actions tab
 
 permissions:
-  contents: write          # commit the seen/cache files back so "New" works across runs
+  contents: read
   pages: write
   id-token: write
 
@@ -34,16 +34,9 @@ jobs:
           ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
           ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
           REED_API_KEY: ${{ secrets.REED_API_KEY }}
-
-      - name: Save state
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f output/seen.json output/cache/cos.json output/cache/postcodes.json
-          if ! git diff --cached --quiet; then
-            git commit -m "Update job state"
-            git push
-          fi
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
