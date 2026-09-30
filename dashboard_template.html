@@ -92,11 +92,13 @@ details.help summary{cursor:pointer;color:var(--ink)}
     <option value="100">Within 100 mi</option><option value="200">Within 200 mi</option>
   </select>
   <select id="contract" aria-label="Contract"><option value="">Any contract</option></select>
+  <select id="source" aria-label="Source"><option value="">All sites</option></select>
   <select id="sort" aria-label="Sort">
     <option value="best">Best match</option><option value="new">Newest first</option>
     <option value="closing">Closing soon</option><option value="near">Nearest</option>
   </select>
   <div class="chips">
+    <button class="chip" id="careOnly" aria-pressed="false">Care homes only</button>
     <button class="chip" id="newOnly" aria-pressed="false">New only</button>
     <button class="chip" id="showHidden" aria-pressed="false">Show hidden</button>
   </div>
@@ -123,7 +125,7 @@ const store = {
   set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)) }catch(e){} }
 };
 const marks = store.get("marks", {});          // id -> "applied" | "hidden"
-const defaults = {q:"", cos:["welcome","licensed"], region:"", dist:"", contract:"", sort:"best", newOnly:false, showHidden:false};
+const defaults = {q:"", cos:["welcome","licensed"], region:"", dist:"", contract:"", source:"", sort:"best", careOnly:false, newOnly:false, showHidden:false};
 let f = Object.assign({}, defaults, store.get("filters", {}));
 let limit = 60;
 
@@ -134,7 +136,9 @@ const days = d => d ? Math.round((new Date(d + "T00:00:00") - today) / 864e5) : 
 const fmtDate = d => d ? new Date(d + "T00:00:00").toLocaleDateString("en-GB", {day:"numeric", month:"short"}) : "";
 const isNew = j => days(j.first_seen) >= -1;
 const money = s => (s || "").replace(/(\d)\.00\b/g, "$1").replace(/£(\d{2})(\d{3})\b/g, "£$1,$2");
-const contractOf = j => /bank/i.test(j.title + " " + j.contract) ? "Bank" : (j.contract || "Other");
+const contractOf = j => /bank/i.test(j.title + " " + j.contract) ? "Bank" : ((j.contract || "Other").split(" · ")[0]);
+const CARE = /care home|nursing home|residential home|residential care|nursing and residential/i;
+const isCare = j => CARE.test(`${j.title} ${j.employer} ${j.snippet}`);
 
 const jobs = DATA ? DATA.jobs : [];
 $("updated").textContent = DATA
@@ -144,6 +148,7 @@ $("updated").textContent = DATA
 // Filter options come from the data so they always match what's there.
 [...new Set(jobs.map(j => j.region).filter(Boolean))].sort().forEach(r => $("region").add(new Option(r, r)));
 [...new Set(jobs.map(contractOf))].sort().forEach(c => $("contract").add(new Option(c, c)));
+[...new Set(jobs.map(j => j.source))].sort().forEach(s => $("source").add(new Option(s, s)));
 
 function stats(){
   const n = c => jobs.filter(j => j.cos === c).length;
@@ -169,7 +174,8 @@ function stats(){
 
 function sync(){
   $("q").value = f.q; $("region").value = f.region; $("dist").value = f.dist;
-  $("contract").value = f.contract; $("sort").value = f.sort;
+  $("contract").value = f.contract; $("source").value = f.source; $("sort").value = f.sort;
+  $("careOnly").setAttribute("aria-pressed", f.careOnly);
   $("newOnly").setAttribute("aria-pressed", f.newOnly);
   $("showHidden").setAttribute("aria-pressed", f.showHidden);
   $("cosChips").innerHTML = Object.entries(COS).map(([k, l]) =>
@@ -189,6 +195,8 @@ function visible(){
     && (!f.region || j.region === f.region)
     && (!f.dist || (j.miles != null && j.miles <= +f.dist))
     && (!f.contract || contractOf(j) === f.contract)
+    && (!f.source || j.source === f.source)
+    && (!f.careOnly || isCare(j))
     && (!f.newOnly || isNew(j))
     && (f.showHidden || marks[j.id] !== "hidden")
     && (!q || `${j.title} ${j.employer} ${j.location} ${j.region}`.toLowerCase().includes(q)));
@@ -219,6 +227,7 @@ function card(j){
       ${j.salary ? `<strong>${esc(money(j.salary))}</strong>` : ""}
       ${j.contract ? `<span>${esc(j.contract)}</span>` : ""}
       ${j.posted ? `<span>Posted ${fmtDate(j.posted)}</span>` : ""}
+      <span>via ${esc(j.source)}</span>
       ${closes}
     </div>
     ${j.snippet ? `<p class="snip">${esc(j.snippet)}</p>` : ""}
@@ -248,7 +257,8 @@ $("list").addEventListener("click", e => {
   render();
 });
 $("q").oninput = e => { f.q = e.target.value; limit = 60; store.set("filters", f); render(); };
-["region", "dist", "contract", "sort"].forEach(id => $(id).onchange = e => { f[id] = e.target.value; limit = 60; sync(); render(); });
+["region", "dist", "contract", "source", "sort"].forEach(id => $(id).onchange = e => { f[id] = e.target.value; limit = 60; sync(); render(); });
+$("careOnly").onclick = () => { f.careOnly = !f.careOnly; limit = 60; sync(); render(); };
 $("newOnly").onclick = () => { f.newOnly = !f.newOnly; sync(); render(); };
 $("showHidden").onclick = () => { f.showHidden = !f.showHidden; sync(); render(); };
 $("reset").onclick = () => { f = Object.assign({}, defaults); limit = 60; sync(); render(); };

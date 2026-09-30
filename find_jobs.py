@@ -26,6 +26,7 @@ import argparse
 import base64
 import bisect
 import csv
+import html
 import io
 import json
 import math
@@ -116,40 +117,57 @@ def nhs_jobs(keyword, profile):
     return jobs
 
 
+def money(lo, hi):
+    """'£22.06 to £23.50/hr' or '£32,000 to £38,000' from a min/max pair."""
+    if not lo:
+        return ""
+    fmt = (lambda v: f"£{v:,.2f}") if lo < 200 else (lambda v: f"£{v:,.0f}")
+    s = fmt(lo) + (f" to {fmt(hi)}" if hi and hi != lo else "")
+    return s + ("/hr" if lo < 200 else "")
+
+
+# Adzuna's free plan allows a few hundred calls a day, so each search stops as soon as a page
+# stops producing nursing roles.
 def adzuna(keyword, profile, max_pages=5):
     app_id, app_key = os.getenv("ADZUNA_APP_ID"), os.getenv("ADZUNA_APP_KEY")
     if not (app_id and app_key):
         return []
+    contract_names = {"permanent": "Permanent", "contract": "Fixed-Term"}
     jobs = []
     for page in range(1, max_pages + 1):
         params = {"app_id": app_id, "app_key": app_key, "what": keyword,
-                  "max_days_old": profile["max_days_old"], "results_per_page": 50,
-                  "content-type": "application/json"}
+                  "category": "healthcare-nursing-jobs", "sort_by": "date",
+                  "max_days_old": profile["max_days_old"], "results_per_page": 50}
         if profile.get("location"):
             params.update(where=profile["location"], distance=round(profile["radius_miles"] * 1.609))
-        raw = fetch(f"https://api.adzuna.com/v1/api/jobs/gb/search/{page}?{urllib.parse.urlencode(params)}")
+        raw = fetch(f"https://api.adzuna.com/v1/api/jobs/gb/search/{page}?{urllib.parse.urlencode(params)}",
+                    {"Accept": "application/json"})
         if not raw:
             break
         results = json.loads(raw).get("results", [])
+        batch = []
         for r in results:
-            lo, hi = r.get("salary_min"), r.get("salary_max")
             area = r.get("location", {}).get("area", [])
-            jobs.append({
+            # Adzuna estimates a salary when the advert has none; that guess isn't worth showing.
+            predicted = str(r.get("salary_is_predicted")) == "1"
+            batch.append({
                 "source": "Adzuna",
                 "id": f"adzuna:{r['id']}",
-                "title": r.get("title", ""),
+                "title": html_text(r.get("title", "")),
                 "employer": r.get("company", {}).get("display_name", ""),
                 "location": r.get("location", {}).get("display_name", ""),
-                "salary": (f"£{lo:,.0f}" + (f" to £{hi:,.0f}" if hi and hi != lo else "")) if lo else "",
-                "contract": " ".join(filter(None, [r.get("contract_type"), r.get("contract_time")])),
+                "salary": "" if predicted else money(r.get("salary_min"), r.get("salary_max")),
+                "contract": " · ".join(filter(None, [contract_names.get(r.get("contract_type"), ""),
+                                                     (r.get("contract_time") or "").replace("_", "-").capitalize()])),
                 "posted": (r.get("created") or "")[:10],
                 "closes": "",
-                "description": r.get("description", ""),
+                "description": html_text(r.get("description", "")),
                 "url": r.get("redirect_url", ""),
                 "lat": r.get("latitude"), "lon": r.get("longitude"),
-                "region": area[2].replace(" England", "") if len(area) > 2 else (area[1] if len(area) > 1 else ""),
+                "region": area[2] if len(area) > 2 else (area[1] if len(area) > 1 else ""),
             })
-        if len(results) < 50:
+        jobs += batch
+        if len(results) < 50 or sum(title_ok(j["title"], profile) for j in batch) < 5:
             break
     return jobs
 
@@ -175,24 +193,28 @@ def reed(keyword, profile, max_pages=5):
         if not raw:
             break
         results = json.loads(raw).get("results", [])
-        for r in results:
-            lo, hi = r.get("minimumSalary"), r.get("maximumSalary")
-            jobs.append({
-                "source": "Reed",
-                "id": f"reed:{r['jobId']}",
-                "title": r.get("jobTitle", ""),
-                "employer": r.get("employerName", ""),
-                "location": r.get("locationName", ""),
-                "salary": (f"£{lo:,.0f}" + (f" to £{hi:,.0f}" if hi and hi != lo else "")) if lo else "",
-                "contract": "",
-                "posted": iso(r.get("date")),
-                "closes": iso(r.get("expirationDate")),
-                "description": r.get("jobDescription", ""),
-                "url": r.get("jobUrl", ""),
-            })
-        if len(results) < 100:
+        batch = [{
+            "source": "Reed",
+            "id": f"reed:{r['jobId']}",
+            "title": html_text(r.get("jobTitle", "")),
+            "employer": r.get("employerName") or "",
+            "location": r.get("locationName") or "",
+            "salary": money(r.get("minimumSalary"), r.get("maximumSalary")),
+            "contract": "",
+            "posted": iso(r.get("date")),
+            "closes": iso(r.get("expirationDate")),
+            "description": html_text(r.get("jobDescription", "")),
+            "url": r.get("jobUrl", ""),
+        } for r in results]
+        jobs += batch
+        if len(results) < 100 or sum(title_ok(j["title"], profile) for j in batch) < 5:
             break
     return jobs
+
+
+def html_text(s):
+    """Adverts from aggregators carry HTML tags/entities in their text."""
+    return " ".join(html.unescape(re.sub(r"<[^>]+>", " ", s or "")).split())
 
 
 SOURCES = [nhs_jobs, adzuna, reed]
@@ -216,8 +238,10 @@ def score(job, profile):
             points += pts
             reasons.append(f"-{word}")
 
-    # Senior bands: the minimum of an annual range gives the band away even when the title doesn't.
-    lo = min_annual_salary(job["salary"])
+    # Senior bands: on NHS pay scales the minimum of an annual range gives the band away even when
+    # the title doesn't. Private adverts are skipped: agencies and care homes often quote hourly rates
+    # as annual equivalents (£22/hr ≈ £43k), which says nothing about seniority.
+    lo = min_annual_salary(job["salary"]) if job["source"] == "NHS Jobs" else None
     if lo and lo > profile.get("max_annual_salary_floor", 10**9):
         return None
 
@@ -246,8 +270,15 @@ def min_annual_salary(salary):
 
 
 def dedupe_key(job):
+    """Same role at the same employer in the same town, whichever site it came from.
+    Sites format locations differently ("Gateshead, NE9 6JE" / "Gateshead, Tyne & Wear"), so only the town is used."""
     norm = lambda s: re.sub(r"[^a-z0-9]", "", s.lower())
-    return "|".join(norm(job[k]) for k in ("title", "employer", "location"))
+    town = POSTCODE.sub("", re.split(r"[,;]", job["location"])[0])
+    return "|".join([norm(job["title"]), norm_org(job["employer"]).replace(" ", ""), norm(town)])
+
+
+# When the same job is on several sites, keep the NHS Jobs copy: its advert gets the COS check.
+SOURCE_RANK = {"NHS Jobs": 0, "Reed": 1, "Adzuna": 2}
 
 
 # ---------------------------------------------------------------- sponsorship
@@ -383,14 +414,22 @@ def add_location(jobs, profile):
         for item in (json.loads(raw)["result"] if raw else []):
             r = item["result"]
             cache[item["query"]] = [r["latitude"], r["longitude"], r["region"] or r["country"]] if r else None
-    if todo:
+    # Aggregator adverts usually give a town instead of a postcode ("Gateshead, Tyne & Wear").
+    town_of = lambda j: "town:" + re.split(r"[,;]", j["location"])[0].strip().lower()
+    towns = sorted({town_of(j) for j in jobs if not j["postcode"] and j["location"]} - set(cache))
+    for key in towns:
+        raw = fetch(f"https://api.postcodes.io/places?{urllib.parse.urlencode({'q': key[5:], 'limit': 1})}")
+        hits = json.loads(raw)["result"] if raw else None
+        if raw is not None:
+            cache[key] = [hits[0]["latitude"], hits[0]["longitude"], hits[0]["region"] or hits[0]["country"]] if hits else None
+    if todo or towns:
         save_json(CACHE / "postcodes.json", cache)
 
     home_ll = cache.get(home)
     for j in jobs:
-        hit = cache.get(j.pop("postcode"))
-        lat, lon = (hit[0], hit[1]) if hit else (j.get("lat"), j.get("lon"))
-        j["region"] = hit[2] if hit else j.get("region", "")
+        hit = cache.get(j.pop("postcode")) or cache.get(town_of(j))
+        lat, lon = (j.get("lat"), j.get("lon")) if j.get("lat") else (hit[0], hit[1]) if hit else (None, None)
+        j["region"] = hit[2] if hit else ""
         j["miles"] = round(haversine_miles(home_ll[:2], (lat, lon))) if home_ll and lat and lon else None
 
 
@@ -458,13 +497,14 @@ def main():
             continue
         job["score"], reasons = s
         job["matched"] = ", ".join(reasons)
-        # The same advert often appears on several sites; keep the best-scored copy.
         k = dedupe_key(job)
-        if k in by_key and by_key[k]["score"] >= job["score"]:
+        pick = lambda j: (SOURCE_RANK[j["source"]], -j["score"])
+        if k in by_key and pick(by_key[k]) <= pick(job):
             continue
         by_key[k] = job
     matches = list(by_key.values())
-    print(f"  {len(matches)} match the profile")
+    per_source = {s: sum(j["source"] == s for j in matches) for s in SOURCE_RANK}
+    print(f"  {len(matches)} match the profile ({', '.join(f'{s} {n}' for s, n in per_source.items() if n)})")
 
     add_sponsorship(matches)
     if profile.get("needs_cos"):
