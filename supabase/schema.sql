@@ -51,7 +51,8 @@ alter table public.geo_cache enable row level security;
 alter table public.job_status enable row level security;
 
 revoke all on public.jobs, public.geo_cache from anon, authenticated;
-revoke all on public.job_status from anon;
+-- Revoke Supabase's default grants first: TRUNCATE in particular bypasses row-level security.
+revoke all on public.job_status from anon, authenticated;
 grant select, insert, update, delete on public.job_status to authenticated;
 grant all on public.jobs, public.geo_cache, public.job_status to service_role;
 
