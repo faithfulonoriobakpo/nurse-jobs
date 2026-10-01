@@ -41,7 +41,7 @@ select{padding:7px 8px;border:1px solid var(--line);border-radius:8px;background
 .chip[aria-pressed=true]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600}
 .count{color:var(--muted);font-size:13px;margin:14px 2px 8px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .count button{background:none;border:0;color:var(--accent);cursor:pointer;font:inherit;font-size:13px;padding:0}
-.job{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:8px;display:grid;grid-template-columns:1fr auto;gap:4px 12px}
+.job{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:8px;display:grid;grid-template-columns:1fr auto;gap:4px 12px;content-visibility:auto;contain-intrinsic-size:auto 190px}
 .job.dim{opacity:.6}
 .top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
 .account{font-size:13px;color:var(--muted);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -148,14 +148,16 @@ const store = {
 let marks = store.get("marks", {});
 let sb = null, user = null, accountMsg = "", showForm = false;
 const defaults = {q:"", cos:["welcome","licensed"], region:"", dist:"", contract:"", source:"", sort:"best", careOnly:false, newOnly:false, showHidden:false, tracked:false};
-let f = Object.assign({}, defaults, store.get("filters", {}));
+let f = Object.assign({}, defaults, store.get("filters", {}), {q: ""});
+const saveFilters = () => store.set("filters", {...f, q: ""});
 let limit = 60;
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const today = new Date(); today.setHours(0,0,0,0);
 const days = d => d ? Math.round((new Date(d + "T00:00:00") - today) / 864e5) : null;
-const fmtDate = d => d ? new Date(d + "T00:00:00").toLocaleDateString("en-GB", {day:"numeric", month:"short"}) : "";
+const DATE_FMT = new Intl.DateTimeFormat("en-GB", {day:"numeric", month:"short"});
+const fmtDate = d => d ? DATE_FMT.format(new Date(d + "T00:00:00")) : "";
 const isNew = j => days(j.first_seen) >= -1;
 const money = s => (s || "").replace(/(\d)\.00\b/g, "$1").replace(/£(\d{2})(\d{3})\b/g, "£$1,$2");
 const contractOf = j => /bank/i.test(j.title + " " + j.contract) ? "Bank" : ((j.contract || "Other").split(" · ")[0]);
@@ -212,7 +214,7 @@ function sync(){
     f.cos = f.cos.includes(k) ? f.cos.filter(x => x !== k) : [...f.cos, k];
     limit = 60; sync(); render();
   });
-  store.set("filters", f);
+  saveFilters();
 }
 
 function visible(){
@@ -247,7 +249,7 @@ function card(j){
   const closes = j.closes ? `<span class="${d <= 3 ? "soon" : ""}">Closes ${d === 0 ? "today" : fmtDate(j.closes)}</span>` : "";
   const where = [j.location, j.region && !j.location.includes(j.region) ? j.region : "", j.miles != null ? `${j.miles} mi` : ""].filter(Boolean).join(" · ");
   const opts = `<option value="">Track…</option>` + Object.entries(STATUS).map(([k, l]) => `<option value="${k}"${m === k ? " selected" : ""}>${l}</option>`).join("");
-  return `<article class="job${m === "rejected" || m === "hidden" || j.active === false ? " dim" : ""}">
+  return `<article class="job${m === "rejected" || m === "hidden" || j.active === false ? " dim" : ""}" data-id="${esc(j.id)}">
     <div><h2><a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a></h2>
       <div class="emp">${esc(j.employer)}</div></div>
     <div class="side">
@@ -271,13 +273,40 @@ function card(j){
   </article>`;
 }
 
+let current = [];   // the filtered, sorted list currently on screen (first `limit` of it rendered)
+
+function updateCount(){
+  $("count").textContent = f.tracked ? `${current.length} tracked job${current.length === 1 ? "" : "s"}`
+    : `Showing ${Math.min(limit, current.length)} of ${current.length} jobs`;
+  $("more").hidden = current.length <= limit;
+}
+
 function render(){
   stats();
-  const list = visible();
-  $("count").textContent = f.tracked ? `${list.length} tracked job${list.length === 1 ? "" : "s"}` : `Showing ${Math.min(limit, list.length)} of ${list.length} jobs`;
-  $("list").innerHTML = list.length ? list.slice(0, limit).map(card).join("")
+  current = visible();
+  $("list").innerHTML = current.length ? current.slice(0, limit).map(card).join("")
     : `<p class="empty">${f.tracked ? "Nothing tracked yet. Use the Track… menu on a job." : "No jobs match these filters."}</p>`;
-  $("more").hidden = list.length <= limit;
+  updateCount();
+}
+
+function showMore(){
+  if (limit >= current.length) return;
+  $("list").insertAdjacentHTML("beforeend", current.slice(limit, limit + 60).map(card).join(""));
+  limit += 60;
+  updateCount();
+}
+
+// Redraw a single job after its status changes, or drop it if it no longer matches (e.g. now hidden).
+function redrawJob(id){
+  stats();
+  const el = $("list").querySelector(`article[data-id="${CSS.escape(id)}"]`);
+  if (visible().some(j => j.id === id)) {
+    if (el) el.outerHTML = card(jobs.find(j => j.id === id));
+  } else {
+    current = current.filter(j => j.id !== id);
+    if (el) { el.remove(); limit -= 1; }   // keep `limit` = number of cards rendered from `current`
+  }
+  updateCount();
 }
 
 $("list").addEventListener("change", e => {
@@ -288,14 +317,14 @@ $("list").addEventListener("change", e => {
 async function setStatus(id, status){
   const prev = marks[id];
   if (status) marks[id] = status; else delete marks[id];
-  render();
+  redrawJob(id);
   if (!user) { store.set("marks", marks); return; }
   const {error} = status
     ? await sb.from("job_status").upsert({job_id: id, status})
     : await sb.from("job_status").delete().eq("job_id", id);
   if (error) {
     if (prev) marks[id] = prev; else delete marks[id];
-    accountMsg = "Couldn't save: " + error.message; renderAccount(); render();
+    accountMsg = "Couldn't save: " + error.message; renderAccount(); redrawJob(id);
   }
 }
 
@@ -356,14 +385,18 @@ async function initAuth(){
   renderAccount();
   if (user) await loadStatuses();
 }
-$("q").oninput = e => { f.q = e.target.value; limit = 60; store.set("filters", f); render(); };
+$("q").oninput = e => { f.q = e.target.value; limit = 60; render(); };
 ["region", "dist", "contract", "source", "sort"].forEach(id => $(id).onchange = e => { f[id] = e.target.value; limit = 60; sync(); render(); });
 $("careOnly").onclick = () => { f.careOnly = !f.careOnly; limit = 60; sync(); render(); };
 $("newOnly").onclick = () => { f.newOnly = !f.newOnly; sync(); render(); };
 $("showHidden").onclick = () => { f.showHidden = !f.showHidden; sync(); render(); };
 $("tracked").onclick = () => { f.tracked = !f.tracked; sync(); render(); };
 $("reset").onclick = () => { f = Object.assign({}, defaults); limit = 60; sync(); render(); };
-$("more").onclick = () => { limit += 60; render(); };
+$("more").onclick = showMore;
+// Load the next batch automatically as the end of the list comes into view; the button stays as a fallback.
+if ("IntersectionObserver" in window) {
+  new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) showMore(); }, {rootMargin: "800px 0px"}).observe($("more"));
+}
 
 sync(); render();
 initAuth();
