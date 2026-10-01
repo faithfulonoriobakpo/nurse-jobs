@@ -77,6 +77,7 @@ select{padding:7px 8px;border:1px solid var(--line);border-radius:8px;background
 details.help{margin-top:22px;font-size:13px;color:var(--muted)}
 details.help summary{cursor:pointer;color:var(--ink)}
 .more{display:block;margin:12px auto;padding:8px 16px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;font:inherit;cursor:pointer}
+.more[hidden]{display:none}
 @media (max-width:640px){
   .stats{grid-template-columns:repeat(2,1fr)}
   .account input{width:100%}
@@ -150,7 +151,8 @@ let sb = null, user = null, accountMsg = "", showForm = false;
 const defaults = {q:"", cos:["welcome","licensed"], region:"", dist:"", contract:"", source:"", sort:"best", careOnly:false, newOnly:false, showHidden:false, tracked:false};
 let f = Object.assign({}, defaults, store.get("filters", {}), {q: ""});
 const saveFilters = () => store.set("filters", {...f, q: ""});
-let limit = 60;
+const PAGE = 60;   // jobs per page
+let limit = PAGE;
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -196,7 +198,7 @@ function stats(){
     else if (k === "new") f.newOnly = !f.newOnly;
     else if (k === "closing") f.sort = f.sort === "closing" ? "best" : "closing";
     else f.cos = (f.cos.length === 1 && f.cos[0] === k) ? ["welcome","licensed"] : [k];
-    limit = 60; sync(); render();
+    limit = PAGE; sync(); render();
   });
 }
 
@@ -212,7 +214,7 @@ function sync(){
   $("cosChips").querySelectorAll(".chip").forEach(b => b.onclick = () => {
     const k = b.dataset.k;
     f.cos = f.cos.includes(k) ? f.cos.filter(x => x !== k) : [...f.cos, k];
-    limit = 60; sync(); render();
+    limit = PAGE; sync(); render();
   });
   saveFilters();
 }
@@ -278,7 +280,9 @@ let current = [];   // the filtered, sorted list currently on screen (first `lim
 function updateCount(){
   $("count").textContent = f.tracked ? `${current.length} tracked job${current.length === 1 ? "" : "s"}`
     : `Showing ${Math.min(limit, current.length)} of ${current.length} jobs`;
-  $("more").hidden = current.length <= limit;
+  const left = current.length - limit;
+  $("more").hidden = left <= 0;
+  if (left > 0) $("more").textContent = `Show ${Math.min(PAGE, left)} more · ${left} left`;
 }
 
 function render(){
@@ -291,8 +295,8 @@ function render(){
 
 function showMore(){
   if (limit >= current.length) return;
-  $("list").insertAdjacentHTML("beforeend", current.slice(limit, limit + 60).map(card).join(""));
-  limit += 60;
+  $("list").insertAdjacentHTML("beforeend", current.slice(limit, limit + PAGE).map(card).join(""));
+  limit += PAGE;
   updateCount();
 }
 
@@ -385,18 +389,14 @@ async function initAuth(){
   renderAccount();
   if (user) await loadStatuses();
 }
-$("q").oninput = e => { f.q = e.target.value; limit = 60; render(); };
-["region", "dist", "contract", "source", "sort"].forEach(id => $(id).onchange = e => { f[id] = e.target.value; limit = 60; sync(); render(); });
-$("careOnly").onclick = () => { f.careOnly = !f.careOnly; limit = 60; sync(); render(); };
+$("q").oninput = e => { f.q = e.target.value; limit = PAGE; render(); };
+["region", "dist", "contract", "source", "sort"].forEach(id => $(id).onchange = e => { f[id] = e.target.value; limit = PAGE; sync(); render(); });
+$("careOnly").onclick = () => { f.careOnly = !f.careOnly; limit = PAGE; sync(); render(); };
 $("newOnly").onclick = () => { f.newOnly = !f.newOnly; sync(); render(); };
 $("showHidden").onclick = () => { f.showHidden = !f.showHidden; sync(); render(); };
 $("tracked").onclick = () => { f.tracked = !f.tracked; sync(); render(); };
-$("reset").onclick = () => { f = Object.assign({}, defaults); limit = 60; sync(); render(); };
+$("reset").onclick = () => { f = Object.assign({}, defaults); limit = PAGE; sync(); render(); };
 $("more").onclick = showMore;
-// Load the next batch automatically as the end of the list comes into view; the button stays as a fallback.
-if ("IntersectionObserver" in window) {
-  new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) showMore(); }, {rootMargin: "800px 0px"}).observe($("more"));
-}
 
 sync(); render();
 initAuth();
