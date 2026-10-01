@@ -41,7 +41,7 @@ select{padding:7px 8px;border:1px solid var(--line);border-radius:8px;background
 .chip[aria-pressed=true]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600}
 .count{color:var(--muted);font-size:13px;margin:14px 2px 8px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .count button{background:none;border:0;color:var(--accent);cursor:pointer;font:inherit;font-size:13px;padding:0}
-.job{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:8px;display:grid;grid-template-columns:1fr auto;gap:4px 12px;content-visibility:auto;contain-intrinsic-size:auto 190px}
+.job{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:8px;display:grid;grid-template-columns:1fr auto;gap:4px 12px}
 .job.dim{opacity:.6}
 .top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
 .account{font-size:13px;color:var(--muted);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -76,11 +76,16 @@ select{padding:7px 8px;border:1px solid var(--line);border-radius:8px;background
 .empty{text-align:center;color:var(--muted);padding:40px 0}
 details.help{margin-top:22px;font-size:13px;color:var(--muted)}
 details.help summary{cursor:pointer;color:var(--ink)}
-.more{display:block;margin:12px auto;padding:8px 16px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;font:inherit;cursor:pointer}
-.more[hidden]{display:none}
+.pager{display:flex;justify-content:center;align-items:center;flex-wrap:wrap;gap:6px;margin:16px 0}
+.pager[hidden]{display:none}
+.pager button{min-width:38px;padding:7px 10px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;font:inherit;font-size:14px;cursor:pointer;font-variant-numeric:tabular-nums}
+.pager button[aria-current=page]{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600;cursor:default}
+.pager button:disabled{opacity:.4;cursor:default}
+.pager .gap{color:var(--muted);padding:0 2px}
 @media (max-width:640px){
   .stats{grid-template-columns:repeat(2,1fr)}
   .account input{width:100%}
+  .pager .wide{display:none}
   .filters{position:static}
   .job{grid-template-columns:1fr}
   .side{flex-direction:row;flex-wrap:wrap;align-items:center}
@@ -99,7 +104,7 @@ details.help summary{cursor:pointer;color:var(--ink)}
 
 <div class="stats" id="stats"></div>
 
-<div class="filters">
+<div class="filters" id="filters">
   <input type="search" id="q" placeholder="Search role, employer, town…" aria-label="Search">
   <div class="chips" id="cosChips" role="group" aria-label="Sponsorship"></div>
   <select id="region" aria-label="Region"><option value="">All regions</option></select>
@@ -123,7 +128,7 @@ details.help summary{cursor:pointer;color:var(--ink)}
 
 <div class="count"><span id="count"></span><button id="reset">Reset filters</button></div>
 <div id="list"></div>
-<button class="more" id="more" hidden>Show more</button>
+<nav class="pager" id="pager" aria-label="Pages" hidden></nav>
 
 <details class="help">
   <summary>What the sponsorship labels mean</summary>
@@ -151,8 +156,8 @@ let sb = null, user = null, accountMsg = "", showForm = false;
 const defaults = {q:"", cos:["welcome","licensed"], region:"", dist:"", contract:"", source:"", sort:"best", careOnly:false, newOnly:false, showHidden:false, tracked:false};
 let f = Object.assign({}, defaults, store.get("filters", {}), {q: ""});
 const saveFilters = () => store.set("filters", {...f, q: ""});
-const PAGE = 60;   // jobs per page
-let limit = PAGE;
+const PAGE = 30;   // jobs per page
+let page = 1;
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -198,7 +203,7 @@ function stats(){
     else if (k === "new") f.newOnly = !f.newOnly;
     else if (k === "closing") f.sort = f.sort === "closing" ? "best" : "closing";
     else f.cos = (f.cos.length === 1 && f.cos[0] === k) ? ["welcome","licensed"] : [k];
-    limit = PAGE; sync(); render();
+    page = 1; sync(); render();
   });
 }
 
@@ -214,7 +219,7 @@ function sync(){
   $("cosChips").querySelectorAll(".chip").forEach(b => b.onclick = () => {
     const k = b.dataset.k;
     f.cos = f.cos.includes(k) ? f.cos.filter(x => x !== k) : [...f.cos, k];
-    limit = PAGE; sync(); render();
+    page = 1; sync(); render();
   });
   saveFilters();
 }
@@ -275,42 +280,72 @@ function card(j){
   </article>`;
 }
 
-let current = [];   // the filtered, sorted list currently on screen (first `limit` of it rendered)
+let current = [];   // the filtered, sorted list; `page` selects which slice of it is on screen
+
+const pageCount = () => Math.max(1, Math.ceil(current.length / PAGE));
+
+// Page numbers to offer: first, last, and the current one with neighbours (two each side; none on phones
+// so the row fits), with gaps as "…".
+const narrow = matchMedia("(max-width:640px)");
+function pageItems(){
+  const n = pageCount(), d = narrow.matches ? 0 : 2, keep = new Set([1, n]);
+  for (let p = page - d; p <= page + d; p++) keep.add(p);
+  const items = [];
+  for (let p = 1; p <= n; p++) {
+    if (keep.has(p)) items.push(p);
+    else if (items[items.length - 1] !== "…") items.push("…");
+  }
+  return items;
+}
+
+function renderPager(){
+  const n = pageCount();
+  $("pager").hidden = n <= 1;
+  if (n <= 1) { $("pager").innerHTML = ""; return; }
+  $("pager").innerHTML =
+    `<button data-p="${page - 1}" ${page === 1 ? "disabled" : ""} aria-label="Previous page">‹<span class="wide"> Prev</span></button>`
+    + pageItems().map(p => p === "…" ? `<span class="gap">…</span>`
+        : `<button data-p="${p}"${p === page ? ` aria-current="page"` : ""} aria-label="Page ${p}">${p}</button>`).join("")
+    + `<button data-p="${page + 1}" ${page === n ? "disabled" : ""} aria-label="Next page"><span class="wide">Next </span>›</button>`;
+}
 
 function updateCount(){
-  $("count").textContent = f.tracked ? `${current.length} tracked job${current.length === 1 ? "" : "s"}`
-    : `Showing ${Math.min(limit, current.length)} of ${current.length} jobs`;
-  const left = current.length - limit;
-  $("more").hidden = left <= 0;
-  if (left > 0) $("more").textContent = `Show ${Math.min(PAGE, left)} more · ${left} left`;
+  const from = (page - 1) * PAGE + 1, to = Math.min(page * PAGE, current.length);
+  const total = `${current.length} ${f.tracked ? "tracked " : ""}job${current.length === 1 ? "" : "s"}`;
+  $("count").textContent = pageCount() > 1 ? `${from}–${to} of ${total}` : total;
 }
 
 function render(){
   stats();
   current = visible();
-  $("list").innerHTML = current.length ? current.slice(0, limit).map(card).join("")
+  page = Math.min(Math.max(1, page), pageCount());
+  const slice = current.slice((page - 1) * PAGE, page * PAGE);
+  $("list").innerHTML = slice.length ? slice.map(card).join("")
     : `<p class="empty">${f.tracked ? "Nothing tracked yet. Use the Track… menu on a job." : "No jobs match these filters."}</p>`;
   updateCount();
+  renderPager();
 }
 
-function showMore(){
-  if (limit >= current.length) return;
-  $("list").insertAdjacentHTML("beforeend", current.slice(limit, limit + PAGE).map(card).join(""));
-  limit += PAGE;
-  updateCount();
+function goToPage(p){
+  page = p;
+  render();
+  // Back to the top of the list, below the sticky filter bar on wide screens.
+  const bar = getComputedStyle($("filters")).position === "sticky" ? $("filters").offsetHeight + 8 : 8;
+  window.scrollTo({top: $("count").getBoundingClientRect().top + window.scrollY - bar});
 }
 
-// Redraw a single job after its status changes, or drop it if it no longer matches (e.g. now hidden).
+$("pager").addEventListener("click", e => {
+  const b = e.target.closest("button[data-p]");
+  if (b && !b.disabled && !b.hasAttribute("aria-current")) goToPage(+b.dataset.p);
+});
+
+// Redraw a single job after its status changes. If it no longer matches (e.g. now hidden), re-render the
+// page so the next job moves up; render() also steps back a page if this one is now empty.
 function redrawJob(id){
-  stats();
   const el = $("list").querySelector(`article[data-id="${CSS.escape(id)}"]`);
-  if (visible().some(j => j.id === id)) {
-    if (el) el.outerHTML = card(jobs.find(j => j.id === id));
-  } else {
-    current = current.filter(j => j.id !== id);
-    if (el) { el.remove(); limit -= 1; }   // keep `limit` = number of cards rendered from `current`
-  }
-  updateCount();
+  if (!visible().some(j => j.id === id)) return render();
+  stats();
+  if (el) el.outerHTML = card(jobs.find(j => j.id === id));
 }
 
 $("list").addEventListener("change", e => {
@@ -389,15 +424,15 @@ async function initAuth(){
   renderAccount();
   if (user) await loadStatuses();
 }
-$("q").oninput = e => { f.q = e.target.value; limit = PAGE; render(); };
-["region", "dist", "contract", "source", "sort"].forEach(id => $(id).onchange = e => { f[id] = e.target.value; limit = PAGE; sync(); render(); });
-$("careOnly").onclick = () => { f.careOnly = !f.careOnly; limit = PAGE; sync(); render(); };
-$("newOnly").onclick = () => { f.newOnly = !f.newOnly; sync(); render(); };
-$("showHidden").onclick = () => { f.showHidden = !f.showHidden; sync(); render(); };
-$("tracked").onclick = () => { f.tracked = !f.tracked; sync(); render(); };
-$("reset").onclick = () => { f = Object.assign({}, defaults); limit = PAGE; sync(); render(); };
-$("more").onclick = showMore;
+$("q").oninput = e => { f.q = e.target.value; page = 1; render(); };
+["region", "dist", "contract", "source", "sort"].forEach(id => $(id).onchange = e => { f[id] = e.target.value; page = 1; sync(); render(); });
+$("careOnly").onclick = () => { f.careOnly = !f.careOnly; page = 1; sync(); render(); };
+$("newOnly").onclick = () => { f.newOnly = !f.newOnly; page = 1; sync(); render(); };
+$("showHidden").onclick = () => { f.showHidden = !f.showHidden; page = 1; sync(); render(); };
+$("tracked").onclick = () => { f.tracked = !f.tracked; page = 1; sync(); render(); };
+$("reset").onclick = () => { f = Object.assign({}, defaults); page = 1; sync(); render(); };
 
+narrow.addEventListener("change", renderPager);
 sync(); render();
 initAuth();
 </script>

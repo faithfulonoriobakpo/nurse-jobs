@@ -72,7 +72,9 @@
     "internal only",
     "internal applicants",
     "internal candidates",
-    "internal applications"
+    "internal applications",
+    "pediatric",
+    "pediatrics"
   ],
   "boost": {
     "band 5": 15,
