@@ -558,7 +558,7 @@ class SupabaseStore:
         for i in range(0, len(old), 100):
             self._call("DELETE", f"jobs?id=in.({self._in(old[i:i + 100])})")
 
-        return [{**r, "active": is_active(r, today)} for r in rows.values()
+        return [{**r, "active": is_active(r, today), "tracked": r["id"] in tracked} for r in rows.values()
                 if r["id"] in tracked or is_active(r, today)]
 
 
@@ -666,7 +666,10 @@ def main():
     new = [j for j in matches if j["id"] not in known and j["cos"] != "no"]
 
     # Jobs that rule sponsorship out are stored too (so their adverts aren't re-checked) but not shown.
-    shown = [j for j in store.save(matches, today) if not (profile.get("needs_cos") and j["cos"] == "no")]
+    # Stored jobs are re-checked against the current profile, so a newly excluded title disappears today
+    # rather than after its grace period. Jobs she is tracking always stay.
+    shown = [j for j in store.save(matches, today)
+             if j.get("tracked") or (title_ok(j["title"], profile) and not (profile.get("needs_cos") and j["cos"] == "no"))]
     rank = {"welcome": 0, "licensed": 1, "unknown": 2, "no": 3}
     shown.sort(key=lambda j: (not j["active"], rank[j["cos"]], -j["score"], j["closes"] or "9999"))
 
