@@ -28,7 +28,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-ap
 .wrap{max-width:1040px;margin:0 auto;padding:20px 16px 60px}
 header h1{font-size:22px;margin:0}
 header p{margin:4px 0 0;color:var(--muted);font-size:13px}
-.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:18px 0}
+.stats{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin:18px 0}
 .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;text-align:left;color:inherit;font:inherit}
 .stat b{display:block;font-size:22px;font-variant-numeric:tabular-nums}
 .stat span{color:var(--muted);font-size:12px}
@@ -69,6 +69,9 @@ select{padding:7px 8px;border:1px solid var(--line);border-radius:8px;background
 .b-new{background:var(--new-soft);color:var(--new)}
 .soon{color:var(--warn)!important;font-weight:600}
 .score{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.star{border:0;background:none;padding:0 2px;font-size:22px;line-height:1;cursor:pointer;color:var(--muted)}
+.star[aria-pressed=true]{color:#e3a008}
+.star:hover{color:#e3a008}
 .actions{grid-column:1/-1;display:flex;gap:8px;margin-top:6px}
 .actions button,.actions a{font:inherit;font-size:13px;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:7px;padding:4px 10px;cursor:pointer;text-decoration:none}
 .actions a{background:var(--accent);border-color:var(--accent);color:#fff}
@@ -82,6 +85,9 @@ details.help summary{cursor:pointer;color:var(--ink)}
 .pager button[aria-current=page]{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600;cursor:default}
 .pager button:disabled{opacity:.4;cursor:default}
 .pager .gap{color:var(--muted);padding:0 2px}
+@media (max-width:760px){
+  .stats{grid-template-columns:repeat(3,1fr)}
+}
 @media (max-width:640px){
   .stats{grid-template-columns:repeat(2,1fr)}
   .account input{width:100%}
@@ -122,6 +128,7 @@ details.help summary{cursor:pointer;color:var(--ink)}
     <button class="chip" id="careOnly" aria-pressed="false">Care homes only</button>
     <button class="chip" id="newOnly" aria-pressed="false">New only</button>
     <button class="chip" id="showHidden" aria-pressed="false">Show hidden</button>
+    <button class="chip" id="starredView" aria-pressed="false">★ Starred</button>
     <button class="chip" id="tracked" aria-pressed="false">My applications</button>
   </div>
 </div>
@@ -143,17 +150,21 @@ details.help summary{cursor:pointer;color:var(--ink)}
 <script>
 const DATA = /*__DATA__*/null;
 const SUPA = /*__SUPABASE__*/null;
-const STATUS = {saved:"Saved", applied:"Applied", interview:"Interview", offer:"Offer", rejected:"Rejected", hidden:"Hidden"};
-const STATUS_ORDER = ["offer", "interview", "applied", "saved", "rejected"];
+const STATUS = {applied:"Applied", interview:"Interview", offer:"Offer", rejected:"Rejected", hidden:"Hidden"};
+const STATUS_ORDER = ["offer", "interview", "applied", "rejected"];
 const COS = {welcome:"Welcomes COS", licensed:"Licensed sponsor", unknown:"Not confirmed"};
 const store = {
   get(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d }catch(e){ return d } },
   set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)) }catch(e){} }
 };
-// id -> status. Signed in: from Supabase (shared across devices). Signed out: this browser only.
-let marks = store.get("marks", {});
+// Signed in: from Supabase (shared across devices and logins). Signed out: this browser only.
+let marks = store.get("marks", {});            // id -> status
+let stars = new Set(store.get("stars", []));   // starred ids ("save for later")
+// The first version had a "saved" status; on this device it becomes a star.
+for (const [id, s] of Object.entries(marks)) if (s === "saved") { stars.add(id); delete marks[id]; }
+const saveLocal = () => { store.set("marks", marks); store.set("stars", [...stars]); };
 let sb = null, user = null, accountMsg = "", showForm = false;
-const defaults = {q:"", cos:["welcome","licensed"], region:"", dist:"", contract:"", source:"", sort:"best", careOnly:false, newOnly:false, showHidden:false, tracked:false};
+const defaults = {q:"", cos:["welcome","licensed"], region:"", dist:"", contract:"", source:"", sort:"best", careOnly:false, newOnly:false, showHidden:false, tracked:false, starred:false};
 let f = Object.assign({}, defaults, store.get("filters", {}), {q: ""});
 const saveFilters = () => store.set("filters", {...f, q: ""});
 const PAGE = 30;   // jobs per page
@@ -190,16 +201,18 @@ function stats(){
     ["licensed", n("licensed"), "At licensed sponsors"],
     ["new", open.filter(isNew).length, "New in last 2 days"],
     ["closing", open.filter(j => { const d = days(j.closes); return d !== null && d <= 3 }).length, "Closing within 3 days"],
+    ["starred", jobs.filter(j => stars.has(j.id)).length, user ? "★ Starred" : "★ Starred (this device)"],
     ["tracked", jobs.filter(isTracked).length, user ? "My applications" : "My applications (this device)"],
   ];
   $("stats").innerHTML = cards.map(([k, v, l]) => {
-    const on = (k === "new" && f.newOnly) || (k === "closing" && f.sort === "closing") || (k === "tracked" && f.tracked)
+    const on = (k === "new" && f.newOnly) || (k === "closing" && f.sort === "closing") || (k === "tracked" && f.tracked) || (k === "starred" && f.starred)
       || ((k === "welcome" || k === "licensed") && f.cos.length === 1 && f.cos[0] === k);
     return `<button class="stat${on ? " on" : ""}" data-k="${k}"><b>${v}</b><span>${l}</span></button>`;
   }).join("");
   $("stats").querySelectorAll(".stat").forEach(b => b.onclick = () => {
     const k = b.dataset.k;
-    if (k === "tracked") f.tracked = !f.tracked;
+    if (k === "tracked") { f.tracked = !f.tracked; f.starred = false; }
+    else if (k === "starred") { f.starred = !f.starred; f.tracked = false; }
     else if (k === "new") f.newOnly = !f.newOnly;
     else if (k === "closing") f.sort = f.sort === "closing" ? "best" : "closing";
     else f.cos = (f.cos.length === 1 && f.cos[0] === k) ? ["welcome","licensed"] : [k];
@@ -214,6 +227,7 @@ function sync(){
   $("newOnly").setAttribute("aria-pressed", f.newOnly);
   $("showHidden").setAttribute("aria-pressed", f.showHidden);
   $("tracked").setAttribute("aria-pressed", f.tracked);
+  $("starredView").setAttribute("aria-pressed", f.starred);
   $("cosChips").innerHTML = Object.entries(COS).map(([k, l]) =>
     `<button class="chip" data-k="${k}" aria-pressed="${f.cos.includes(k)}">${l}</button>`).join("");
   $("cosChips").querySelectorAll(".chip").forEach(b => b.onclick = () => {
@@ -227,6 +241,10 @@ function sync(){
 function visible(){
   const q = f.q.trim().toLowerCase();
   const text = j => `${j.title} ${j.employer} ${j.location} ${j.region}`.toLowerCase().includes(q);
+  if (f.starred) {
+    return jobs.filter(j => stars.has(j.id) && (!q || text(j)))
+      .sort((a, b) => (a.active === false) - (b.active === false) || (a.closes || "9999").localeCompare(b.closes || "9999"));
+  }
   if (f.tracked) {
     return jobs.filter(j => isTracked(j) && (!q || text(j)))
       .sort((a, b) => STATUS_ORDER.indexOf(marks[a.id]) - STATUS_ORDER.indexOf(marks[b.id]) || (a.closes || "9999").localeCompare(b.closes || "9999"));
@@ -260,6 +278,7 @@ function card(j){
     <div><h2><a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a></h2>
       <div class="emp">${esc(j.employer)}</div></div>
     <div class="side">
+      <button class="star" data-star="${esc(j.id)}" aria-pressed="${stars.has(j.id)}" title="${stars.has(j.id) ? "Starred: tap to remove" : "Star to save for later"}" aria-label="Star this job">${stars.has(j.id) ? "★" : "☆"}</button>
       <span class="badge b-${j.cos}">${COS[j.cos]}</span>
       ${j.active === false ? `<span class="badge b-closed">Closed</span>` : isNew(j) ? `<span class="badge b-new">New</span>` : ""}
       <span class="score" title="Match with CV: ${esc(j.matched)}">Match ${j.score}</span>
@@ -311,7 +330,7 @@ function renderPager(){
 
 function updateCount(){
   const from = (page - 1) * PAGE + 1, to = Math.min(page * PAGE, current.length);
-  const total = `${current.length} ${f.tracked ? "tracked " : ""}job${current.length === 1 ? "" : "s"}`;
+  const total = `${current.length} ${f.tracked ? "tracked " : f.starred ? "starred " : ""}job${current.length === 1 ? "" : "s"}`;
   $("count").textContent = pageCount() > 1 ? `${from}–${to} of ${total}` : total;
 }
 
@@ -321,7 +340,7 @@ function render(){
   page = Math.min(Math.max(1, page), pageCount());
   const slice = current.slice((page - 1) * PAGE, page * PAGE);
   $("list").innerHTML = slice.length ? slice.map(card).join("")
-    : `<p class="empty">${f.tracked ? "Nothing tracked yet. Use the Track… menu on a job." : "No jobs match these filters."}</p>`;
+    : `<p class="empty">${f.tracked ? "Nothing tracked yet. Use the Track… menu on a job." : f.starred ? "No starred jobs yet. Tap ☆ on a job to save it for later." : "No jobs match these filters."}</p>`;
   updateCount();
   renderPager();
 }
@@ -353,18 +372,38 @@ $("list").addEventListener("change", e => {
   if (sel) setStatus(sel.dataset.id, sel.value);
 });
 
-async function setStatus(id, status){
-  const prev = marks[id];
-  if (status) marks[id] = status; else delete marks[id];
-  redrawJob(id);
-  if (!user) { store.set("marks", marks); return; }
-  const {error} = status
-    ? await sb.from("job_status").upsert({job_id: id, status})
+$("list").addEventListener("click", e => {
+  const b = e.target.closest("button[data-star]");
+  if (b) toggleStar(b.dataset.star);
+});
+
+// Write a job's status + star; a job with neither has no row.
+async function persist(id){
+  if (!user) { saveLocal(); return null; }
+  const status = marks[id] || null, starred = stars.has(id);
+  const {error} = status || starred
+    ? await sb.from("job_status").upsert({job_id: id, status, starred})
     : await sb.from("job_status").delete().eq("job_id", id);
-  if (error) {
-    if (prev) marks[id] = prev; else delete marks[id];
-    accountMsg = "Couldn't save: " + error.message; renderAccount(); redrawJob(id);
-  }
+  return error;
+}
+
+async function update(id, change, undo){
+  change();
+  redrawJob(id);
+  const error = await persist(id);
+  if (error) { undo(); accountMsg = "Couldn't save: " + error.message; renderAccount(); redrawJob(id); }
+}
+
+function setStatus(id, status){
+  const prev = marks[id];
+  update(id, () => { if (status) marks[id] = status; else delete marks[id]; },
+             () => { if (prev) marks[id] = prev; else delete marks[id]; });
+}
+
+function toggleStar(id){
+  const was = stars.has(id);
+  const flip = on => () => { if (on) stars.add(id); else stars.delete(id); };
+  update(id, flip(!was), flip(was));
 }
 
 // ---- accounts (Supabase). Only accounts created in the Supabase dashboard can sign in.
@@ -394,19 +433,21 @@ function renderAccount(){
 }
 
 async function loadStatuses(){
-  if (!user) { marks = store.get("marks", {}); render(); return; }
-  const {data, error} = await sb.from("job_status").select("job_id,status");
+  if (!user) { marks = store.get("marks", {}); stars = new Set(store.get("stars", [])); render(); return; }
+  const {data, error} = await sb.from("job_status").select("job_id,status,starred");
   if (error) { accountMsg = "Couldn't load applications: " + error.message; renderAccount(); return; }
-  const server = Object.fromEntries(data.map(r => [r.job_id, r.status]));
-  // Carry over anything marked on this device before signing in.
+  const onServer = new Set(data.map(r => r.job_id));
+  // Carry over anything marked or starred on this device before signing in.
   const known = new Set(jobs.map(j => j.id));
-  const local = Object.entries(store.get("marks", {})).filter(([id]) => !(id in server) && known.has(id))
-    .map(([job_id, status]) => ({job_id, status}));
+  const ids = [...new Set([...Object.keys(marks), ...stars])].filter(id => !onServer.has(id) && known.has(id));
+  const local = ids.map(id => ({job_id: id, status: marks[id] && marks[id] !== "saved" ? marks[id] : null, starred: stars.has(id) || marks[id] === "saved"}))
+    .filter(r => r.status || r.starred);
   if (local.length) {
     const {error: upErr} = await sb.from("job_status").upsert(local);
-    if (!upErr) { local.forEach(r => server[r.job_id] = r.status); store.set("marks", {}); }
+    if (!upErr) { data.push(...local); store.set("marks", {}); store.set("stars", []); }
   }
-  marks = server;
+  marks = Object.fromEntries(data.filter(r => r.status).map(r => [r.job_id, r.status]));
+  stars = new Set(data.filter(r => r.starred).map(r => r.job_id));
   render();
 }
 
@@ -429,7 +470,8 @@ $("q").oninput = e => { f.q = e.target.value; page = 1; render(); };
 $("careOnly").onclick = () => { f.careOnly = !f.careOnly; page = 1; sync(); render(); };
 $("newOnly").onclick = () => { f.newOnly = !f.newOnly; page = 1; sync(); render(); };
 $("showHidden").onclick = () => { f.showHidden = !f.showHidden; page = 1; sync(); render(); };
-$("tracked").onclick = () => { f.tracked = !f.tracked; page = 1; sync(); render(); };
+$("tracked").onclick = () => { f.tracked = !f.tracked; f.starred = false; page = 1; sync(); render(); };
+$("starredView").onclick = () => { f.starred = !f.starred; f.tracked = false; page = 1; sync(); render(); };
 $("reset").onclick = () => { f = Object.assign({}, defaults); page = 1; sync(); render(); };
 
 narrow.addEventListener("change", renderPager);

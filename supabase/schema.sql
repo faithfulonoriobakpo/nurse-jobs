@@ -40,11 +40,23 @@ create table if not exists public.geo_cache (
 
 create table if not exists public.job_status (
   job_id      text primary key references public.jobs (id) on delete cascade,
-  status      text not null check (status in ('saved', 'applied', 'interview', 'offer', 'rejected', 'hidden')),
+  status      text check (status is null or status in ('applied', 'interview', 'offer', 'rejected', 'hidden')),
+  starred     boolean not null default false,  -- "save for later", independent of the status
   note        text,
   updated_at  timestamptz not null default now(),
-  updated_by  uuid default auth.uid() references auth.users (id) on delete set null
+  updated_by  uuid default auth.uid() references auth.users (id) on delete set null,
+  constraint job_status_has_something check (status is not null or starred)
 );
+
+-- Upgrade from the first version, where "saved" was a status: it becomes a star.
+alter table public.job_status add column if not exists starred boolean not null default false;
+alter table public.job_status alter column status drop not null;
+update public.job_status set starred = true, status = null where status = 'saved';
+alter table public.job_status drop constraint if exists job_status_status_check;
+alter table public.job_status add constraint job_status_status_check
+  check (status is null or status in ('applied', 'interview', 'offer', 'rejected', 'hidden'));
+alter table public.job_status drop constraint if exists job_status_has_something;
+alter table public.job_status add constraint job_status_has_something check (status is not null or starred);
 
 alter table public.jobs enable row level security;
 alter table public.geo_cache enable row level security;

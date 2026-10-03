@@ -88,8 +88,11 @@ def main():
     print("  tables:", ", ".join(t["table_name"] for t in tables))
 
     print("Configuring sign-in (sign-ups off, dashboard allowed as redirect)...")
+    # The project is shared with dev-jobs, so add to the allowed addresses rather than replacing them.
+    allowed = [u for u in (api("GET", f"/projects/{ref}/config/auth", token).get("uri_allow_list") or "").split(",") if u]
     api("PATCH", f"/projects/{ref}/config/auth", token,
-        {"disable_signup": True, "site_url": DASHBOARD_URL, "uri_allow_list": DASHBOARD_URL})
+        {"disable_signup": True, "site_url": DASHBOARD_URL,
+         "uri_allow_list": ",".join(allowed + ([DASHBOARD_URL] if DASHBOARD_URL not in allowed else []))})
 
     keys = api("GET", f"/projects/{ref}/api-keys?reveal=true", token)
     values = {

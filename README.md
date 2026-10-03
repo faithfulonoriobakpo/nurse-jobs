@@ -17,9 +17,12 @@ Adverts that say sponsorship is *not* available are left out.
 On the dashboard she can:
 - filter by region, distance from Gateshead, contract type (Bank / Permanent / Fixed-Term) or site, or show care homes only;
 - sort by best match, newest, closing soon or nearest;
-- track each job as Saved, Applied, Interview, Offer, Rejected or Hidden, and see them all under **My applications** (closed jobs stay there).
+- **star** a job (☆) to save it for later, and see them all under **★ Starred**, soonest closing first;
+- track each job as Applied, Interview, Offer, Rejected or Hidden, and see them all under **My applications**.
 
-Signed in, statuses are stored in Supabase and shared between devices and between the two logins. Signed out, they're saved in that browser only, then uploaded on first sign-in. Logins are created in the Supabase dashboard (Authentication → Users); public sign-ups are turned off.
+Starred and tracked jobs stay listed after they close.
+
+Signed in, stars and statuses are stored in Supabase and shared between devices and between the two logins. Signed out, they're saved in that browser only, then uploaded on first sign-in. Logins are created in the Supabase dashboard (Authentication → Users); public sign-ups are turned off.
 
 ## How it runs
 
