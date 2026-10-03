@@ -26,8 +26,12 @@ create table if not exists public.jobs (
   snippet     text,
   first_seen  date not null default current_date,
   last_seen   date not null default current_date,
+  closed_on   date,                          -- the advert said it had closed (checked for tracked jobs)
+  checked_on  date,                          -- the advert was last confirmed still open
   updated_at  timestamptz not null default now()
 );
+alter table public.jobs add column if not exists closed_on date;
+alter table public.jobs add column if not exists checked_on date;
 create index if not exists jobs_last_seen_idx on public.jobs (last_seen);
 create index if not exists jobs_cos_idx on public.jobs (cos);
 
@@ -40,7 +44,7 @@ create table if not exists public.geo_cache (
 
 create table if not exists public.job_status (
   job_id      text primary key references public.jobs (id) on delete cascade,
-  status      text check (status is null or status in ('applied', 'interview', 'offer', 'rejected', 'hidden')),
+  status      text check (status is null or status in ('applied', 'interview', 'offer', 'rejected', 'closed', 'hidden')),
   starred     boolean not null default false,  -- "save for later", independent of the status
   note        text,
   updated_at  timestamptz not null default now(),
@@ -54,7 +58,7 @@ alter table public.job_status alter column status drop not null;
 update public.job_status set starred = true, status = null where status = 'saved';
 alter table public.job_status drop constraint if exists job_status_status_check;
 alter table public.job_status add constraint job_status_status_check
-  check (status is null or status in ('applied', 'interview', 'offer', 'rejected', 'hidden'));
+  check (status is null or status in ('applied', 'interview', 'offer', 'rejected', 'closed', 'hidden'));
 alter table public.job_status drop constraint if exists job_status_has_something;
 alter table public.job_status add constraint job_status_has_something check (status is not null or starred);
 

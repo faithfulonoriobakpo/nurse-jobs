@@ -446,10 +446,29 @@ def is_active(job, today):
     """Still worth showing. NHS Jobs is searched in full every day, so an NHS job that wasn't seen has been
     withdrawn (a day's grace for a missed page). Adzuna/Reed searches are capped, so their jobs are kept
     for a week after last being seen, unless the closing date has passed."""
-    if job.get("closes") and job["closes"] < today.isoformat():
+    if job.get("closed_on") or (job.get("closes") and job["closes"] < today.isoformat()):
         return False
+    if job.get("checked_on") == today.isoformat():   # the advert itself was confirmed open today
+        return True
     grace = 1 if job["source"] == "NHS Jobs" else 7
     return job["last_seen"] >= (today - timedelta(days=grace)).isoformat()
+
+
+# NHS Jobs keeps closed adverts online with this notice; other sites usually remove the page.
+CLOSED_TEXT = re.compile(r"This job is now closed|(job|vacancy|advert|position) (is no longer available|has (now )?(closed|expired|been filled|been removed))"
+                         r"|no longer accepting applications", re.I)
+
+
+def advert_state(url):
+    """'closed' / 'open' from the advert page itself, or None when it couldn't be checked."""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=30) as r:
+            page = r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return "closed" if e.code in (404, 410) else None
+    except Exception:
+        return None
+    return "closed" if CLOSED_TEXT.search(re.sub(r"<[^>]+>", " ", page)) else "open"
 
 
 class FileStore:
@@ -541,12 +560,14 @@ class SupabaseStore:
                                     "region": v[2] if v else None} for k in sorted(added) for v in [cache[k]]])
 
     def save(self, jobs, today):
-        self._upsert("jobs", [{c: j.get(c) for c in JOB_COLUMNS} for j in jobs])
+        # A job in today's search is open, whatever an earlier advert check said.
+        self._upsert("jobs", [{**{c: j.get(c) for c in JOB_COLUMNS}, "closed_on": None} for j in jobs])
 
         # Dashboard: everything still active, plus anything she has tracked (even once it has closed).
         tracked = {r["job_id"] for r in self._select_all("job_status", "select=job_id&order=job_id")}
+        self.check_tracked_adverts(tracked, today)
         since = (today - timedelta(days=8)).isoformat()
-        cols = ",".join(JOB_COLUMNS)
+        cols = ",".join(JOB_COLUMNS + ["closed_on", "checked_on"])
         rows = {r["id"]: r for r in self._select_all("jobs", f"select={cols}&last_seen=gte.{since}&order=id")}
         missing = sorted(tracked - set(rows))
         for i in range(0, len(missing), 100):
@@ -560,6 +581,27 @@ class SupabaseStore:
 
         return [{**r, "active": is_active(r, today), "tracked": r["id"] in tracked} for r in rows.values()
                 if r["id"] in tracked or is_active(r, today)]
+
+    def check_tracked_adverts(self, tracked, today):
+        """Open the advert of each starred / tracked job that wasn't in today's search: mark it closed if the site
+        says so, or confirm it's still open (search results sometimes miss a live advert)."""
+        iso = today.isoformat()
+        rows = []
+        for i in range(0, len(tracked), 100):
+            ids = self._in(sorted(tracked)[i:i + 100])
+            rows += self._call("GET", f"jobs?select=id,url,closes,last_seen,closed_on,checked_on&id=in.({ids})"
+                                      f"&closed_on=is.null&last_seen=lt.{iso}")
+        rows = [r for r in rows if r["url"] and r["checked_on"] != iso and not (r["closes"] and r["closes"] < iso)]
+        if not rows:
+            return
+        print(f"Checking {len(rows)} starred/tracked adverts that weren't in today's search...")
+        with ThreadPoolExecutor(6) as pool:
+            states = list(pool.map(lambda r: advert_state(r["url"]), rows))
+        for r, state in zip(rows, states):
+            if state:
+                self._call("PATCH", f"jobs?id=eq.{urllib.parse.quote(r['id'])}",
+                           {"closed_on": iso} if state == "closed" else {"checked_on": iso}, prefer="return=minimal")
+        print(f"  {states.count('closed')} closed, {states.count('open')} still open, {states.count(None)} couldn't be checked")
 
 
 def open_store():

@@ -18,7 +18,7 @@ On the dashboard she can:
 - filter by region, distance from Gateshead, contract type (Bank / Permanent / Fixed-Term) or site, or show care homes only;
 - sort by best match, newest, closing soon or nearest;
 - **star** a job (☆) to save it for later, and see them all under **★ Starred**, soonest closing first;
-- track each job as Applied, Interview, Offer, Rejected or Hidden, and see them all under **My applications**.
+- track each job as Applied, Interview, Offer, Rejected, Closed on site or Hidden, and see applications under **My applications**. *Closed on site* and *Hidden* take a job off the main list ("Show hidden & closed" brings them back).
 
 Starred and tracked jobs stay listed after they close.
 
@@ -32,7 +32,8 @@ The GitHub Action `.github/workflows/find-jobs.yml` runs every morning (and on d
 2. Keeps only roles matching the CV (`profile.json`).
 3. Checks each new NHS advert for its sponsorship section, and each employer against today's sponsor register.
 4. Saves every job to Supabase with its first and last seen dates. A job stays listed until it closes, even if a day's search misses it (NHS Jobs: 1 day's grace; Adzuna/Reed: 7 days, since their searches are capped).
-5. Publishes `output/dashboard/` to GitHub Pages.
+5. Opens the advert of every starred or tracked job that wasn't in today's search. If the site says it has closed (NHS Jobs: "This job is now closed"; elsewhere a removed page), the job is marked closed; if it's still open, it stays listed even though the search missed it.
+6. Publishes `output/dashboard/` to GitHub Pages.
 
 ## Supabase
 

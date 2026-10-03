@@ -127,7 +127,7 @@ details.help summary{cursor:pointer;color:var(--ink)}
   <div class="chips">
     <button class="chip" id="careOnly" aria-pressed="false">Care homes only</button>
     <button class="chip" id="newOnly" aria-pressed="false">New only</button>
-    <button class="chip" id="showHidden" aria-pressed="false">Show hidden</button>
+    <button class="chip" id="showHidden" aria-pressed="false">Show hidden &amp; closed</button>
     <button class="chip" id="starredView" aria-pressed="false">★ Starred</button>
     <button class="chip" id="tracked" aria-pressed="false">My applications</button>
   </div>
@@ -150,7 +150,8 @@ details.help summary{cursor:pointer;color:var(--ink)}
 <script>
 const DATA = /*__DATA__*/null;
 const SUPA = /*__SUPABASE__*/null;
-const STATUS = {applied:"Applied", interview:"Interview", offer:"Offer", rejected:"Rejected", hidden:"Hidden"};
+const STATUS = {applied:"Applied", interview:"Interview", offer:"Offer", rejected:"Rejected", closed:"Closed on site", hidden:"Hidden"};
+const PUT_AWAY = ["hidden", "closed"];   // statuses that take a job off the main list
 const STATUS_ORDER = ["offer", "interview", "applied", "rejected"];
 const COS = {welcome:"Welcomes COS", licensed:"Licensed sponsor", unknown:"Not confirmed"};
 const store = {
@@ -184,7 +185,7 @@ const isCare = j => CARE.test(`${j.title} ${j.employer} ${j.snippet}`);
 
 const jobs = DATA ? DATA.jobs : [];
 const open = jobs.filter(j => j.active !== false);
-const isTracked = j => marks[j.id] && marks[j.id] !== "hidden";
+const isTracked = j => marks[j.id] && !PUT_AWAY.includes(marks[j.id]);
 $("updated").textContent = DATA
   ? `Updated ${new Date(DATA.generated).toLocaleString("en-GB", {weekday:"short", day:"numeric", month:"short", hour:"2-digit", minute:"2-digit"})} · ${open.length} Band 5 / RN roles across the UK · distances from ${DATA.home}`
   : "No data yet. Run find_jobs.py.";
@@ -257,7 +258,7 @@ function visible(){
     && (!f.source || j.source === f.source)
     && (!f.careOnly || isCare(j))
     && (!f.newOnly || isNew(j))
-    && (f.showHidden || marks[j.id] !== "hidden")
+    && (f.showHidden || !PUT_AWAY.includes(marks[j.id]))
     && (!q || text(j)));
   const rank = {welcome:0, licensed:1, unknown:2};
   const by = {
@@ -274,13 +275,14 @@ function card(j){
   const closes = j.closes ? `<span class="${d <= 3 ? "soon" : ""}">Closes ${d === 0 ? "today" : fmtDate(j.closes)}</span>` : "";
   const where = [j.location, j.region && !j.location.includes(j.region) ? j.region : "", j.miles != null ? `${j.miles} mi` : ""].filter(Boolean).join(" · ");
   const opts = `<option value="">Track…</option>` + Object.entries(STATUS).map(([k, l]) => `<option value="${k}"${m === k ? " selected" : ""}>${l}</option>`).join("");
-  return `<article class="job${m === "rejected" || m === "hidden" || j.active === false ? " dim" : ""}" data-id="${esc(j.id)}">
+  const closed = j.active === false || m === "closed";
+  return `<article class="job${m === "rejected" || m === "hidden" || closed ? " dim" : ""}" data-id="${esc(j.id)}">
     <div><h2><a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a></h2>
       <div class="emp">${esc(j.employer)}</div></div>
     <div class="side">
       <button class="star" data-star="${esc(j.id)}" aria-pressed="${stars.has(j.id)}" title="${stars.has(j.id) ? "Starred: tap to remove" : "Star to save for later"}" aria-label="Star this job">${stars.has(j.id) ? "★" : "☆"}</button>
       <span class="badge b-${j.cos}">${COS[j.cos]}</span>
-      ${j.active === false ? `<span class="badge b-closed">Closed</span>` : isNew(j) ? `<span class="badge b-new">New</span>` : ""}
+      ${closed ? `<span class="badge b-closed">Closed</span>` : isNew(j) ? `<span class="badge b-new">New</span>` : ""}
       <span class="score" title="Match with CV: ${esc(j.matched)}">Match ${j.score}</span>
     </div>
     <div class="meta">
