@@ -26,7 +26,7 @@ Signed in, stars and statuses are stored in Supabase and shared between devices 
 
 ## How it runs
 
-The GitHub Action `.github/workflows/find-jobs.yml` runs every morning (and on demand from the Actions tab → "Run workflow"). It:
+The GitHub Action `.github/workflows/find-jobs.yml` runs hourly from 07:00 to 22:00 UK time and once overnight (and on demand from the Actions tab → "Run workflow"). Each run that finds new jobs welcoming COS or at licensed sponsors sends a Telegram message (`setup_telegram.py` connects the bot). It:
 
 1. Searches NHS Jobs across the UK. Adzuna and Reed are added too if their keys are set as repo secrets `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` and `REED_API_KEY`.
 2. Keeps only roles matching the CV (`profile.json`).

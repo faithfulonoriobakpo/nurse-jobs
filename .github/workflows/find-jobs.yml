@@ -2,7 +2,10 @@ name: Find nursing jobs
 
 on:
   schedule:
-    - cron: "0 */4 * * *"   # every 4 hours (00:00, 04:00 ... UTC)
+    # Hourly through the UK day (06-22 UTC covers 07:00-22:00 UK time in both BST and GMT), when adverts are
+    # posted and popular ones can close early; once overnight. Minute 7 avoids GitHub's busy top of the hour.
+    - cron: "7 6-22 * * *"
+    - cron: "7 2 * * *"
   workflow_dispatch:       # "Run workflow" button on the Actions tab
 
 permissions:

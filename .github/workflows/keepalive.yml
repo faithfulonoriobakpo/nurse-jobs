@@ -1,0 +1,29 @@
+name: Keep schedules alive
+
+# GitHub turns off scheduled workflows in a public repo after 60 days without activity.
+# Once a month, if nothing has been committed for 45 days, push an empty commit so the searches keep running.
+on:
+  schedule:
+    - cron: "17 3 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Commit if the repo has been quiet
+        run: |
+          last=$(git log -1 --format=%ct)
+          days=$(( ($(date +%s) - last) / 86400 ))
+          if [ "$days" -ge 45 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "Keep scheduled searches active"
+            git push
+          else
+            echo "Last commit was $days days ago; nothing to do."
+          fi
