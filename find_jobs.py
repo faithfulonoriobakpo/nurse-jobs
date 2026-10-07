@@ -609,6 +609,51 @@ def open_store():
     return SupabaseStore(url, key) if url and key else FileStore()
 
 
+# ---------------------------------------------------------------- notifications
+
+def telegram(text):
+    """Send one message to TELEGRAM_CHAT_ID. Never raises: a failed alert mustn't fail the run."""
+    token, chat = os.getenv("TELEGRAM_BOT_TOKEN"), os.getenv("TELEGRAM_CHAT_ID")
+    if not (token and chat):
+        return False
+    body = json.dumps({"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}).encode()
+    try:
+        req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=body,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read()).get("ok", False)
+    except Exception as e:
+        print(f"  ! Telegram message failed: {type(e).__name__}", file=sys.stderr)
+        return False
+
+
+def notify_new_jobs(new, profile):
+    """One Telegram message listing jobs seen for the first time this run (best first, up to 10)."""
+    if not new:
+        return
+    esc = lambda s: html.escape(str(s or ""), quote=False)
+    label = {"welcome": "✅ Welcomes COS", "licensed": "🟡 Licensed sponsor"}
+    rank = {"welcome": 0, "licensed": 1}
+    new = sorted(new, key=lambda j: (rank[j["cos"]], -j["score"]))
+    n = {c: sum(j["cos"] == c for j in new) for c in rank}
+    counts = ", ".join(filter(None, [f"{n['welcome']} welcome COS" if n["welcome"] else "",
+                                     f"{n['licensed']} at licensed sponsor{'s' if n['licensed'] != 1 else ''}" if n["licensed"] else ""]))
+    # "£32073.00 to £39043.00" -> "£32,073–£39,043"
+    pay = lambda s: re.sub(r"£(\d+)(?:\.00)?", lambda m: f"£{int(m.group(1)):,}", s or "").replace(" to ", "–")
+    when = lambda d: datetime.strptime(d, "%Y-%m-%d").strftime("%-d %b") if os.name != "nt" else datetime.strptime(d, "%Y-%m-%d").strftime("%#d %b")
+    lines = [f"🩺 <b>{len(new)} new nurse job{'s' if len(new) != 1 else ''}</b> ({counts})", ""]
+    for j in new[:10]:
+        town = re.split(r"[,;]", j["location"])[0].strip()
+        extra = " · ".join(filter(None, [esc(town), esc(pay(j["salary"])), f"closes {when(j['closes'])}" if j.get("closes") else ""]))
+        lines.append(f"• <a href=\"{esc(j['url'])}\">{esc(j['title'])}</a>, {esc(j['employer'])}\n   {label[j['cos']]} · {extra}")
+    if len(new) > 10:
+        lines.append(f"…and {len(new) - 10} more")
+    if profile.get("dashboard_url"):
+        lines += ["", f"<a href=\"{esc(profile['dashboard_url'])}\">Open the dashboard</a>"]
+    if telegram("\n".join(lines)):
+        print(f"  Telegram: sent {len(new)} new job(s)")
+
+
 def load_env_file(path):
     """KEY=VALUE lines from a local, git-ignored file (for local runs; the Action uses repo secrets)."""
     if path.exists():
@@ -656,6 +701,7 @@ def main():
     ap.add_argument("--profile", default=ROOT / "profile.json", type=Path)
     ap.add_argument("--open", action="store_true", help="open the dashboard when done")
     ap.add_argument("--open-if-new", action="store_true", help="open the dashboard only if there are new jobs")
+    ap.add_argument("--no-notify", action="store_true", help="don't send the Telegram message for new jobs")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     load_env_file(ROOT / ".env.local")
@@ -726,6 +772,8 @@ def main():
     for j in [j for j in new if j["cos"] != "unknown"][:10]:
         print(f"  [{j['cos']:>8}] {j['title']} - {j['employer']} ({j['location']}) {j['salary']}")
     print(f"Dashboard: {dashboard}")
+    if not args.no_notify:
+        notify_new_jobs([j for j in new if j["cos"] in ("welcome", "licensed")], profile)
     if args.open or (args.open_if_new and new):
         webbrowser.open(dashboard.as_uri())
 

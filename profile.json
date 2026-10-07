@@ -125,5 +125,6 @@
     "max_days_old": "jobs without a closing date are dropped once older than this",
     "max_annual_salary_floor": "drop roles whose MINIMUM annual salary is above this (Band 6 starts at £39,959; London Band 5 with HCAS starts ~£38.5k). Hourly rates are never dropped"
   },
-  "home_label": "Gateshead"
+  "home_label": "Gateshead",
+  "dashboard_url": "https://faithfulonoriobakpo.github.io/nurse-jobs/"
 }

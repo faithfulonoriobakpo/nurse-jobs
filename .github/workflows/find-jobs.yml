@@ -2,7 +2,7 @@ name: Find nursing jobs
 
 on:
   schedule:
-    - cron: "0 6 * * *"   # daily, 07:00 UK summer time / 06:00 winter
+    - cron: "0 */4 * * *"   # every 4 hours (00:00, 04:00 ... UTC)
   workflow_dispatch:       # "Run workflow" button on the Actions tab
 
 permissions:
@@ -28,6 +28,14 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The Home Office sponsor register is large and changes daily: download it once a day, not every run.
+      - id: day
+        run: echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: output/cache/sponsors.json
+          key: sponsors-${{ steps.day.outputs.date }}
+
       - name: Search jobs and build dashboard
         run: python find_jobs.py
         env:
@@ -37,6 +45,8 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
