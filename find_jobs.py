@@ -612,19 +612,21 @@ def open_store():
 # ---------------------------------------------------------------- notifications
 
 def telegram(text):
-    """Send one message to TELEGRAM_CHAT_ID. Never raises: a failed alert mustn't fail the run."""
-    token, chat = os.getenv("TELEGRAM_BOT_TOKEN"), os.getenv("TELEGRAM_CHAT_ID")
-    if not (token and chat):
-        return False
-    body = json.dumps({"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}).encode()
-    try:
-        req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=body,
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return json.loads(r.read()).get("ok", False)
-    except Exception as e:
-        print(f"  ! Telegram message failed: {type(e).__name__}", file=sys.stderr)
-        return False
+    """Send a message to every chat in TELEGRAM_CHAT_ID (comma-separated). True if at least one got it.
+    Never raises: a failed alert mustn't fail the run."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chats = [c.strip() for c in (os.getenv("TELEGRAM_CHAT_ID") or "").split(",") if c.strip()]
+    sent = 0
+    for chat in chats if token else []:
+        body = json.dumps({"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}).encode()
+        try:
+            req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=body,
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                sent += bool(json.loads(r.read()).get("ok"))
+        except Exception as e:
+            print(f"  ! Telegram message to one chat failed: {type(e).__name__}", file=sys.stderr)
+    return sent > 0
 
 
 def notify_new_jobs(new, profile):
